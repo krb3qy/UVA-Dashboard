@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UVA Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #151922;
+      --panel-2: #1b2030;
+      --border: #242a3a;
+      --text: #e6e9ef;
+      --muted: #8993a4;
+      --accent: #5aa9ff;
+      --accent-2: #7a8aff;
+      --green: #3ccf7a;
+      --amber: #f1b44c;
+      --red: #ef5b5b;
+      --hold: #ff9a3c;
+      --row-hover: #1f2538;
+      --row-selected: #27314b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    #app-root { display: none; height: 100vh; flex-direction: column; }
+    #security-block { padding: 40px; text-align: center; color: var(--muted); }
+
+    /* Header */
+    header { display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+      background: var(--panel); border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+    header .sp { flex: 1; }
+    header .status-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.connected { background: var(--green); }
+    .dot.warn { background: var(--amber); }
+    .dot.err { background: var(--red); }
+
+    /* Buttons */
+    .btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      padding: 5px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
+    .btn:hover:not(:disabled) { background: var(--row-hover); }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #001530; border-color: var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-2); }
+    .btn-danger { background: transparent; color: var(--red); border-color: var(--red); }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+    .btn-sm { padding: 3px 8px; font-size: 11px; }
+
+    /* Layout */
+    #mainContent { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .banner-host { padding: 0 12px; }
+    .banner-host.hidden { display: none; }
+    .banner { background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      padding: 8px 12px; margin-top: 8px; border-radius: 4px; display: flex; align-items: center; gap: 12px; }
+    .banner.warn { border-left-color: var(--amber); }
+    .banner.error { border-left-color: var(--red); }
+    .banner-content { flex: 1; }
+    .banner-title { font-weight: 600; font-size: 12px; }
+    .banner-msg { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+    /* Panels */
+    .panels { flex: 1; display: flex; flex-direction: column; gap: 1px; overflow: hidden;
+      background: var(--border); }
+    .panel { background: var(--panel); display: flex; flex-direction: column; overflow: hidden; }
+    .panel.my-panel { flex: 0 0 36%; }
+    .panel.queue-panel { flex: 1; }
+    .panel-head { display: flex; align-items: center; padding: 6px 10px;
+      background: var(--panel-2); border-bottom: 1px solid var(--border); gap: 8px; }
+    .panel-head .title { font-weight: 600; font-size: 12px; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted); }
+    .panel-head .sp { flex: 1; }
+
+    /* Tab bar */
+    .tab-bar { display: flex; gap: 2px; overflow-x: auto; }
+    .tab { padding: 4px 10px; background: var(--panel); border: 1px solid var(--border);
+      border-bottom: none; font-size: 11px; cursor: pointer; border-radius: 4px 4px 0 0;
+      display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .tab.active { background: var(--row-selected); color: var(--text); }
+    .tab .close { opacity: .5; }
+    .tab .close:hover { opacity: 1; color: var(--red); }
+    .tab .count { background: var(--panel-2); padding: 0 5px; border-radius: 8px; font-size: 10px; }
+
+    /* Table */
+    .rows { flex: 1; overflow-y: auto; font-size: 12px; }
+    table.rows-table { width: 100%; border-collapse: collapse; }
+    table.rows-table th { position: sticky; top: 0; background: var(--panel-2);
+      text-align: left; padding: 5px 8px; font-weight: 600; font-size: 11px;
+      color: var(--muted); text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--border); }
+    table.rows-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    table.rows-table tr { cursor: pointer; }
+    table.rows-table tr:hover td { background: var(--row-hover); }
+    table.rows-table tr.selected td { background: var(--row-selected); }
+    .state-pill { padding: 1px 6px; font-size: 10px; border-radius: 3px;
+      background: var(--panel-2); color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+    .state-pill.connected { background: rgba(60,207,122,.18); color: var(--green); }
+    .state-pill.alerting { background: rgba(241,180,76,.18); color: var(--amber); }
+    .state-pill.dialing, .state-pill.contacting { background: rgba(122,138,255,.18); color: var(--accent-2); }
+    .state-pill.held { background: rgba(255,154,60,.18); color: var(--hold); }
+    .state-pill.disconnected { background: rgba(239,91,91,.18); color: var(--red); }
+    .state-pill.offering { background: rgba(90,169,255,.18); color: var(--accent); }
+
+    .empty-msg { color: var(--muted); text-align: center; padding: 20px; font-size: 12px; }
+
+    /* Action toolbar */
+    .action-bar { display: flex; gap: 4px; padding: 6px 10px;
+      background: var(--panel-2); border-top: 1px solid var(--border); flex-wrap: wrap; }
+    .action-bar .btn { padding: 4px 8px; font-size: 11px; }
+    .action-bar .sep { width: 1px; background: var(--border); margin: 0 2px; }
+
+    /* Modals */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55);
+      display: none; align-items: center; justify-content: center; z-index: 100; }
+    .modal-backdrop.active { display: flex; }
+    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      padding: 16px; min-width: 360px; max-width: 520px; max-height: 80vh; overflow: auto; }
+    .modal h2 { margin: 0 0 12px; font-size: 14px; }
+    .modal label { display: block; color: var(--muted); font-size: 11px; margin: 8px 0 4px; }
+    .modal input[type="text"], .modal select, .modal textarea {
+      width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 8px; border-radius: 4px; font: inherit; }
+    .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    .queue-picker-item { padding: 6px 8px; display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid var(--border); cursor: pointer; }
+    .queue-picker-item:hover { background: var(--row-hover); }
+
+    /* Context menu */
+    .ctx-menu { position: fixed; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 4px; padding: 4px 0; min-width: 180px; z-index: 200; display: none;
+      box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+    .ctx-menu.active { display: block; }
+    .ctx-menu .item { padding: 6px 12px; cursor: pointer; font-size: 12px; }
+    .ctx-menu .item:hover { background: var(--row-hover); }
+    .ctx-menu .item.disabled { color: var(--muted); cursor: not-allowed; }
+    .ctx-menu .item.disabled:hover { background: transparent; }
+    .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
+
+    /* Popout placeholder */
+    #popoutPlaceholder { display: none; padding: 40px; text-align: center; color: var(--muted); }
+    #popoutPlaceholder.active { display: block; }
+  </style>
+</head>
+<body>
+
+<div id="security-block">Loading security gate…</div>
+
+<div id="app-root">
+  <header>
+    <h1>UVA Dashboard</h1>
+    <div class="sp"></div>
+    <div class="status-wrap"><span id="statusDot" class="dot"></span><span id="statusText">Initializing…</span></div>
+    <button id="settingsBtn" class="btn btn-sm" title="Configure queues">⚙</button>
+    <a id="popoutBtn" class="btn btn-sm" href="#" target="_blank" rel="noopener" title="Pop out to own window">⤢ Pop Out</a>
+    <button id="logoutBtn" class="btn btn-ghost btn-sm" title="Log out">Logout</button>
+  </header>
+
+  <div id="bannerHost" class="banner-host hidden"></div>
+
+  <div id="popoutPlaceholder">
+    <p>The UVA Dashboard is open in a separate window.</p>
+    <button id="popinFromPlaceholder" class="btn btn-primary">Return Here</button>
+  </div>
+
+  <div id="mainContent">
+    <div class="panels">
+      <!-- MY INTERACTIONS -->
+      <div class="panel my-panel">
+        <div class="panel-head">
+          <span class="title">My Interactions</span>
+          <span class="sp"></span>
+          <span id="myCount" class="btn-ghost btn-sm" style="font-size:11px">0</span>
+        </div>
+        <div class="rows">
+          <table class="rows-table" id="myTable">
+            <thead><tr>
+              <th>Name</th><th>Number</th><th>Queue</th><th>State</th><th>Duration</th>
+            </tr></thead>
+            <tbody id="myBody"></tbody>
+          </table>
+          <div class="empty-msg" id="myEmpty">No interactions</div>
+        </div>
+        <div class="action-bar" id="myActions"></div>
+      </div>
+
+      <!-- QUEUE PANEL -->
+      <div class="panel queue-panel">
+        <div class="panel-head">
+          <div class="tab-bar" id="tabBar"></div>
+          <span class="sp"></span>
+          <button id="addTabBtn" class="btn btn-sm" title="Add queue tab">+ Queue</button>
+        </div>
+        <div class="rows">
+          <table class="rows-table" id="queueTable">
+            <thead><tr>
+              <th>Name</th><th>Number</th><th>Queue</th><th>State</th><th>Assigned</th><th>Duration</th>
+            </tr></thead>
+            <tbody id="queueBody"></tbody>
+          </table>
+          <div class="empty-msg" id="queueEmpty">No queue selected — click + Queue</div>
+        </div>
+        <div class="action-bar" id="queueActions"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div id="settingsModal" class="modal-backdrop">
+  <div class="modal">
+    <h2>Settings</h2>
+    <label>Monitored queues (click to toggle; active queues open as tabs)</label>
+    <div id="queueList" style="max-height:40vh; overflow:auto; border:1px solid var(--border); border-radius:4px;"></div>
+    <label style="margin-top:12px">Alert-Extension-v2 ID (for WebRTC pickup — find in chrome://extensions)</label>
+    <input type="text" id="extensionIdInput" placeholder="(leave blank to disable click-injection)" />
+    <div class="actions">
+      <button class="btn" id="settingsClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Transfer modal -->
+<div id="transferModal" class="modal-backdrop">
+  <div class="modal">
+    <h2>Transfer</h2>
+    <label>Destination (phone number, user email, or queue name)</label>
+    <input type="text" id="transferTo" />
+    <div class="actions">
+      <button class="btn" id="transferCancel">Cancel</button>
+      <button class="btn btn-primary" id="transferGo">Transfer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div id="ctxMenu" class="ctx-menu"></div>
+
+<script>
+// ===== Security gate: only run inside GC iframe OR as popout with token =====
+(function gate() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const mode = urlParams.get("mode");
+  const hasPopoutToken = !!localStorage.getItem("gc_uvad_popout_token");
+  const framed = window.self !== window.top;
+  // Allow: (1) framed inside any parent; (2) popout mode with handoff token; (3) GH Pages standalone for dev
+  if (framed || mode === "popout" || hasPopoutToken || location.hostname === "krb3qy.github.io" || location.hostname === "localhost") {
+    document.getElementById("security-block").style.display = "none";
+    document.getElementById("app-root").style.display = "flex";
+  } else {
+    document.getElementById("security-block").innerText = "This page must be loaded inside Genesys Cloud.";
+  }
+})();
+
+// ================================================================
+//  CONFIG
+// ================================================================
+const CONFIG = {
+  clientId: "acd9ac35-984e-4f30-bb46-426160f498e0",
+  environment: "usw2.pure.cloud",
+  scope: "routing conversations user-basic-info notifications analytics:readonly presence users:readonly"
+};
+
+const STORAGE = {
+  token: "gc_uvad_token",
+  tokenExpiresAt: "gc_uvad_token_expires_at",
+  pkceVerifier: "gc_uvad_pkce_verifier",
+  oauthState: "gc_uvad_oauth_state",
+  settings: "gc_uvad_settings"
+};
+
+const loginBase = () => `https://login.${CONFIG.environment}`;
+const apiBase  = () => `https://api.${CONFIG.environment}`;
+const redirectUri = () => window.location.origin + window.location.pathname;
+const el = (id) => document.getElementById(id);
+
+// ================================================================
+//  State
+// ================================================================
+const conversations = new Map();   // convId → normalized call object
+const queuesById = new Map();      // queueId → {id,name}
+const usersById = new Map();       // userId → {id,name}
+let currentUserId = null;
+let selectedQueueIds = [];         // tabs, in order
+let activeTabQueueId = null;       // which tab is currently showing
+let selectedCallId = null;
+let selectedCallScope = null;      // "my" | "queue"
+let settings = { extensionId: "" };
+let ws = null;
+let wsChannelId = null;
+let wsChannelUri = null;
+let subscribedTopics = new Set();
+let authRedirectInProgress = false;
+let bannerTimeout = null;
+let durationTickTimer = null;
+
+// ================================================================
+//  Status / Banner
+// ================================================================
+function setStatus(text, kind = "") {
+  const dot = el("statusDot");
+  const txt = el("statusText");
+  if (txt) txt.textContent = text;
+  if (dot) {
+    dot.classList.remove("connected","warn","err");
+    if (kind === "ok") dot.classList.add("connected");
+    else if (kind === "warn") dot.classList.add("warn");
+    else if (kind === "err") dot.classList.add("err");
+  }
+}
+
+function showBanner({ type = "info", title = "", message = "", autoHideMs = 0 } = {}) {
+  const host = el("bannerHost");
+  if (bannerTimeout) { clearTimeout(bannerTimeout); bannerTimeout = null; }
+  host.classList.remove("hidden");
+  host.innerHTML = `
+    <div class="banner ${type}">
+      <div class="banner-content">
+        <div class="banner-title">${title}</div>
+        ${message ? `<div class="banner-msg">${message}</div>` : ""}
+      </div>
+      <div class="banner-actions">
+        <button id="bannerDismiss" class="btn btn-ghost btn-sm">Dismiss</button>
+      </div>
+    </div>`;
+  const dBtn = document.getElementById("bannerDismiss");
+  if (dBtn) dBtn.addEventListener("click", () => { host.classList.add("hidden"); host.innerHTML = ""; });
+  if (autoHideMs > 0) bannerTimeout = setTimeout(() => { host.classList.add("hidden"); host.innerHTML = ""; }, autoHideMs);
+}
+
+// ================================================================
+//  PKCE / OAuth
+// ================================================================
+function base64UrlEncode(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
+}
+function randomString(length = 64) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncode(bytes.buffer);
+}
+async function sha256(input) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+}
+async function createPkceChallenge(v) { return base64UrlEncode(await sha256(v)); }
+
+function saveToken(tj) {
+  const expiresAt = Date.now() + (Number(tj.expires_in || 0) * 1000);
+  sessionStorage.setItem(STORAGE.token, tj.access_token);
+  sessionStorage.setItem(STORAGE.tokenExpiresAt, String(expiresAt));
+}
+function clearAuth() {
+  sessionStorage.removeItem(STORAGE.token);
+  sessionStorage.removeItem(STORAGE.tokenExpiresAt);
+  sessionStorage.removeItem(STORAGE.pkceVerifier);
+  sessionStorage.removeItem(STORAGE.oauthState);
+}
+function getToken() {
+  const tok = sessionStorage.getItem(STORAGE.token);
+  const exp = Number(sessionStorage.getItem(STORAGE.tokenExpiresAt) || "0");
+  if (!tok) return null;
+  if (Date.now() > (exp - 30000)) return null;
+  return tok;
+}
+
+function buildAuthorizeUrl(challenge, state) {
+  const u = new URL(`${loginBase()}/oauth/authorize`);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("client_id", CONFIG.clientId);
+  u.searchParams.set("redirect_uri", redirectUri());
+  u.searchParams.set("code_challenge_method", "S256");
+  u.searchParams.set("code_challenge", challenge);
+  u.searchParams.set("state", state);
+  if (CONFIG.scope) u.searchParams.set("scope", CONFIG.scope);
+  return u.toString();
+}
+
+async function startLogin() {
+  const verifier = randomString(64);
+  const challenge = await createPkceChallenge(verifier);
+  const state = randomString(24);
+  sessionStorage.setItem(STORAGE.pkceVerifier, verifier);
+  sessionStorage.setItem(STORAGE.oauthState, state);
+  window.location.assign(buildAuthorizeUrl(challenge, state));
+}
+
+async function exchangeCodeForToken(code) {
+  const verifier = sessionStorage.getItem(STORAGE.pkceVerifier);
+  const expectedState = sessionStorage.getItem(STORAGE.oauthState);
+  const url = new URL(window.location.href);
+  const state = url.searchParams.get("state");
+  if (!state || !expectedState || state !== expectedState) throw new Error("Invalid OAuth state.");
+  if (!verifier) throw new Error("Missing PKCE verifier.");
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("client_id", CONFIG.clientId);
+  body.set("code", code);
+  body.set("redirect_uri", redirectUri());
+  body.set("code_verifier", verifier);
+  const resp = await fetch(`${loginBase()}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body
+  });
+  if (!resp.ok) throw new Error(`Token exchange failed: ${resp.status} ${await resp.text()}`);
+  saveToken(await resp.json());
+  url.searchParams.delete("code"); url.searchParams.delete("state"); url.searchParams.delete("error");
+  window.history.replaceState({}, document.title, url.toString());
+  sessionStorage.removeItem(STORAGE.pkceVerifier);
+  sessionStorage.removeItem(STORAGE.oauthState);
+}
+
+async function redirectToGenesysLogin(reason = "") {
+  if (authRedirectInProgress) return;
+  authRedirectInProgress = true;
+  setStatus("Re-authenticating…","warn");
+  showBanner({ type: "info", title: "Session expired", message: reason || "Redirecting to Genesys sign-in…" });
+  clearAuth();
+  setTimeout(startLogin, 450);
+}
+
+async function apiFetch(path, { method = "GET", body = null } = {}) {
+  const token = getToken();
+  if (!token) {
+    await redirectToGenesysLogin("Your session ended.");
+    throw new Error("AUTH_REDIRECT");
+  }
+  const resp = await fetch(`${apiBase()}${path}`, {
+    method,
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (resp.status === 401) { await redirectToGenesysLogin(); throw new Error("AUTH_REDIRECT"); }
+  if (!resp.ok) throw new Error(`${method} ${path} → ${resp.status}: ${await resp.text()}`);
+  if (resp.status === 204) return null;
+  const ct = resp.headers.get("content-type") || "";
+  return ct.includes("application/json") ? resp.json() : resp.text();
+}
+
+// ================================================================
+//  Notification WebSocket
+// ================================================================
+async function ensureChannel() {
+  if (wsChannelId && ws && ws.readyState === WebSocket.OPEN) return;
+  const ch = await apiFetch("/api/v2/notifications/channels", { method: "POST" });
+  wsChannelId = ch.id;
+  wsChannelUri = ch.connectUri;
+  await new Promise((resolve, reject) => {
+    ws = new WebSocket(wsChannelUri);
+    ws.onopen = () => { setStatus("Live","ok"); resolve(); };
+    ws.onerror = (e) => { setStatus("WebSocket error","err"); reject(e); };
+    ws.onclose = () => { setStatus("WS closed","warn"); ws = null; wsChannelId = null; };
+    ws.onmessage = (ev) => {
+      try { handleNotification(JSON.parse(ev.data)); } catch (err) { console.error("notif parse", err); }
+    };
+  });
+}
+
+async function setSubscriptions(topics) {
+  if (!wsChannelId) await ensureChannel();
+  const body = topics.map(t => ({ id: t }));
+  await apiFetch(`/api/v2/notifications/channels/${wsChannelId}/subscriptions`, { method: "PUT", body });
+  subscribedTopics = new Set(topics);
+}
+
+function computeTopics() {
+  const topics = [];
+  if (currentUserId) {
+    topics.push(`v2.users.${currentUserId}.conversations.calls`);
+    topics.push(`v2.users.${currentUserId}.presence`);
+    topics.push(`v2.users.${currentUserId}.routingStatus`);
+  }
+  for (const qid of selectedQueueIds) {
+    topics.push(`v2.routing.queues.${qid}.conversations.calls`);
+  }
+  return topics;
+}
+
+async function refreshSubscriptions() {
+  const topics = computeTopics();
+  if (topics.length === 0) return;
+  await setSubscriptions(topics);
+}
+
+// ================================================================
+//  Notification handling
+// ================================================================
+function handleNotification(msg) {
+  if (msg?.topicName === "channel.metadata") return;
+  const topic = msg.topicName || "";
+  if (topic.includes(".conversations.calls")) {
+    const c = msg.eventBody;
+    if (c && c.id) {
+      ingestConversation(c);
+      renderAll();
+    }
+  } else if (topic.endsWith(".presence") || topic.endsWith(".routingStatus")) {
+    // later: reflect presence of current user / tracked agents
+  }
+}
+
+// Turn a GC conversation payload into a dashboard row
+function ingestConversation(c) {
+  const parts = c.participants || [];
+  const customer = parts.find(p => p.purpose === "customer" || p.purpose === "external") || {};
+  const agent = [...parts].reverse().find(p => p.purpose === "agent") || null;
+  const acd = parts.find(p => p.purpose === "acd") || null;
+  const calls = (agent?.calls || customer?.calls || parts.flatMap(p => p.calls || []));
+  const primaryCall = calls.find(cc => cc.state && cc.state !== "disconnected") || calls[0] || {};
+  const queueId = acd?.queueId || agent?.queueId || null;
+  const row = {
+    id: c.id,
+    name: customer.name || agent?.name || "",
+    number: customer.address || primaryCall.other || primaryCall.self || "",
+    queueId,
+    queueName: queueId ? (queuesById.get(queueId)?.name || queueId) : "",
+    state: primaryCall.state || agent?.state || "connected",
+    held: !!primaryCall.held,
+    assignedUserId: agent?.userId || null,
+    assignedUserName: agent?.userId ? (usersById.get(agent.userId)?.name || agent.name || "") : "",
+    startTime: primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime || agent?.connectedTime || c.dateModified || c.dateStart || Date.now(),
+    hasMe: parts.some(p => p.userId === currentUserId && !p.endTime),
+    disconnected: parts.every(p => p.state === "disconnected" || p.endTime),
+    raw: c
+  };
+  // Mirror held flag into a derived state
+  if (row.held) row.state = "held";
+  if (row.disconnected) {
+    conversations.delete(row.id);
+  } else {
+    conversations.set(row.id, row);
+  }
+  // Resolve queue name asynchronously if we don't know it
+  if (queueId && !queuesById.has(queueId)) resolveQueue(queueId).then(renderAll).catch(()=>{});
+  // Resolve user name
+  if (row.assignedUserId && !usersById.has(row.assignedUserId)) resolveUser(row.assignedUserId).then(renderAll).catch(()=>{});
+}
+
+// ================================================================
+//  Resolvers + initial loads
+// ================================================================
+async function resolveQueue(id) {
+  const q = await apiFetch(`/api/v2/routing/queues/${id}`);
+  queuesById.set(id, { id, name: q.name });
+  return q;
+}
+async function resolveUser(id) {
+  const u = await apiFetch(`/api/v2/users/${id}`);
+  usersById.set(id, { id, name: u.name });
+  return u;
+}
+async function fetchCurrentUser() {
+  const me = await apiFetch("/api/v2/users/me");
+  currentUserId = me.id;
+  usersById.set(me.id, { id: me.id, name: me.name });
+}
+async function fetchAllQueues() {
+  const out = [];
+  let page = 1;
+  while (true) {
+    const r = await apiFetch(`/api/v2/routing/queues?pageSize=100&pageNumber=${page}`);
+    for (const q of r.entities || []) { out.push(q); queuesById.set(q.id, { id: q.id, name: q.name }); }
+    if (!r.entities || r.entities.length < 100) break;
+    page++;
+    if (page > 20) break;
+  }
+  return out;
+}
+async function seedMyInteractions() {
+  // Pull current interactions once so the panel isn't empty before events fire
+  try {
+    const r = await apiFetch("/api/v2/conversations");
+    for (const c of r.entities || []) ingestConversation(c);
+  } catch (e) { console.warn("seedMyInteractions failed", e); }
+}
+
+// ================================================================
+//  Rendering
+// ================================================================
+function humanDuration(ms) {
+  if (!ms || ms < 0) return "";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`
+               : `${m}:${String(sec).padStart(2,"0")}`;
+}
+
+function statePill(s) {
+  const k = (s || "").toLowerCase();
+  return `<span class="state-pill ${k}">${s || ""}</span>`;
+}
+
+function isMyCall(row) { return row.hasMe; }
+function isQueueCall(row, queueId) {
+  if (!queueId) return false;
+  return row.queueId === queueId;
+}
+
+function renderMy() {
+  const body = el("myBody");
+  const empty = el("myEmpty");
+  const rows = [...conversations.values()].filter(isMyCall);
+  el("myCount").textContent = rows.length;
+  if (rows.length === 0) { body.innerHTML = ""; empty.style.display = "block"; return; }
+  empty.style.display = "none";
+  body.innerHTML = rows.map(r => renderRow(r, "my")).join("");
+}
+
+function renderQueue() {
+  const body = el("queueBody");
+  const empty = el("queueEmpty");
+  if (!activeTabQueueId) { body.innerHTML = ""; empty.textContent = "No queue selected — click + Queue"; empty.style.display = "block"; return; }
+  const rows = [...conversations.values()].filter(r => isQueueCall(r, activeTabQueueId));
+  if (rows.length === 0) { body.innerHTML = ""; empty.textContent = `No calls in ${queuesById.get(activeTabQueueId)?.name || activeTabQueueId}`; empty.style.display = "block"; return; }
+  empty.style.display = "none";
+  body.innerHTML = rows.map(r => renderRow(r, "queue")).join("");
+}
+
+function renderRow(r, scope) {
+  const sel = (selectedCallId === r.id && selectedCallScope === scope) ? " selected" : "";
+  const dur = humanDuration(Date.now() - new Date(r.startTime).getTime());
+  const assigned = r.assignedUserName || "";
+  if (scope === "my") {
+    return `<tr class="row${sel}" data-id="${r.id}" data-scope="my">
+      <td>${escape(r.name)}</td>
+      <td>${escape(r.number)}</td>
+      <td>${escape(r.queueName)}</td>
+      <td>${statePill(r.state)}</td>
+      <td>${dur}</td>
+    </tr>`;
+  }
+  return `<tr class="row${sel}" data-id="${r.id}" data-scope="queue">
+    <td>${escape(r.name)}</td>
+    <td>${escape(r.number)}</td>
+    <td>${escape(r.queueName)}</td>
+    <td>${statePill(r.state)}</td>
+    <td>${escape(assigned)}</td>
+    <td>${dur}</td>
+  </tr>`;
+}
+
+function escape(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+function renderTabs() {
+  const bar = el("tabBar");
+  bar.innerHTML = selectedQueueIds.map(qid => {
+    const qn = queuesById.get(qid)?.name || qid;
+    const count = [...conversations.values()].filter(r => r.queueId === qid).length;
+    const active = activeTabQueueId === qid ? " active" : "";
+    return `<div class="tab${active}" data-qid="${qid}">
+      <span>${escape(qn)}</span>
+      <span class="count">${count}</span>
+      <span class="close" data-close="${qid}">✕</span>
+    </div>`;
+  }).join("");
+}
+
+function renderActions() {
+  const selRow = selectedCallId ? conversations.get(selectedCallId) : null;
+  const renderBar = (host, row, scope) => {
+    const h = el(host);
+    if (!row || (scope === "my" && selectedCallScope !== "my") || (scope === "queue" && selectedCallScope !== "queue")) {
+      h.innerHTML = `<span style="color:var(--muted);font-size:11px">${scope === "my" ? "Select an interaction for actions" : "Select a queue call for actions"}</span>`;
+      return;
+    }
+    const isHeld = row.state === "held" || row.held;
+    const isMine = row.hasMe;
+    const buttons = [];
+    if (scope === "my" && isMine) {
+      buttons.push(`<button class="btn btn-sm" data-act="answer">Answer</button>`);
+      buttons.push(`<button class="btn btn-sm" data-act="${isHeld ? 'unhold' : 'hold'}">${isHeld ? 'Unhold' : 'Hold'}</button>`);
+      buttons.push(`<button class="btn btn-sm" data-act="mute">Mute</button>`);
+      buttons.push(`<button class="btn btn-sm" data-act="transfer">Transfer</button>`);
+      buttons.push(`<span class="sep"></span>`);
+      buttons.push(`<button class="btn btn-sm btn-danger" data-act="disconnect">Disconnect</button>`);
+    }
+    if (scope === "queue") {
+      buttons.push(`<button class="btn btn-sm" data-act="pickup">Pick Up</button>`);
+      buttons.push(`<span class="sep"></span>`);
+      buttons.push(`<button class="btn btn-sm" data-act="listen">Listen</button>`);
+      buttons.push(`<button class="btn btn-sm" data-act="coach">Coach</button>`);
+      buttons.push(`<button class="btn btn-sm" data-act="barge">Join</button>`);
+    }
+    h.innerHTML = buttons.join("");
+    h.querySelectorAll("button").forEach(b => b.addEventListener("click", () => doAction(b.dataset.act, row)));
+  };
+  renderBar("myActions", selRow, "my");
+  renderBar("queueActions", selRow, "queue");
+}
+
+function renderAll() {
+  renderTabs();
+  renderMy();
+  renderQueue();
+  renderActions();
+}
+
+// ================================================================
+//  Duration tick
+// ================================================================
+function startDurationTick() {
+  if (durationTickTimer) return;
+  durationTickTimer = setInterval(renderAll, 1000);
+}
+
+// ================================================================
+//  Actions
+// ================================================================
+async function doAction(act, row) {
+  try {
+    const convId = row.id;
+    const myPart = (row.raw.participants || []).find(p => p.userId === currentUserId && !p.endTime);
+    const myPartId = myPart?.id;
+    switch (act) {
+      case "answer": {
+        if (!myPartId) throw new Error("No participant to answer on");
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "connected" } });
+        // WebRTC fallback via extension bridge (no-op if user isn't WebRTC)
+        sendToExtension({ action: "answerCall", convId });
+        break;
+      }
+      case "hold":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: true } });
+        break;
+      case "unhold":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: false } });
+        break;
+      case "mute":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { muted: true } });
+        break;
+      case "disconnect":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
+        break;
+      case "transfer": openTransferModal(convId, myPartId); break;
+      case "pickup": {
+        // "Pickup" from queue = replace alerting/acd leg, routing to me
+        // Path: POST /conversations/calls/{id}/participants/{participantId}/replace with {userId: me}
+        const target = (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
+        if (!target) throw new Error("No pickup-eligible participant");
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, { method: "POST", body: { userId: currentUserId, voicemail: false } });
+        sendToExtension({ action: "answerCall", convId });
+        break;
+      }
+      case "listen": {
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${findAgentPartId(row)}/monitor`, { method: "POST", body: {} });
+        break;
+      }
+      case "coach": {
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${findAgentPartId(row)}/coach`, { method: "POST", body: {} });
+        break;
+      }
+      case "barge": {
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${findAgentPartId(row)}/barge`, { method: "POST", body: {} });
+        break;
+      }
+      default: console.warn("unhandled action", act);
+    }
+  } catch (e) {
+    console.error(e);
+    showBanner({ type: "error", title: "Action failed", message: e?.message || String(e), autoHideMs: 5000 });
+  }
+}
+
+function findAgentPartId(row) {
+  const agent = (row.raw.participants || []).reverse().find(p => p.purpose === "agent" && !p.endTime);
+  if (!agent) throw new Error("No agent participant to target");
+  return agent.id;
+}
+
+function sendToExtension(msg) {
+  if (!settings.extensionId) return;
+  try {
+    chrome?.runtime?.sendMessage(settings.extensionId, msg, (_resp) => { /* ignore */ });
+  } catch (e) { /* not a chrome env */ }
+}
+
+function openTransferModal(convId, partId) {
+  el("transferModal").classList.add("active");
+  const input = el("transferTo");
+  input.value = "";
+  input.focus();
+  el("transferCancel").onclick = () => el("transferModal").classList.remove("active");
+  el("transferGo").onclick = async () => {
+    const to = input.value.trim();
+    if (!to) return;
+    try {
+      const body = /^\+?\d[\d \-().]{5,}/.test(to) ? { address: to } : { userId: to };
+      await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`, { method: "POST", body });
+      el("transferModal").classList.remove("active");
+    } catch (e) {
+      showBanner({ type: "error", title: "Transfer failed", message: e?.message || String(e), autoHideMs: 5000 });
+    }
+  };
+}
+
+// ================================================================
+//  Settings
+// ================================================================
+function loadSettings() {
+  try { const s = JSON.parse(localStorage.getItem(STORAGE.settings) || "{}"); settings = { extensionId: "", ...s }; } catch { settings = { extensionId: "" }; }
+  const sq = localStorage.getItem("gc_uvad_queues");
+  if (sq) { try { selectedQueueIds = JSON.parse(sq); } catch {} }
+}
+function saveSettings() {
+  localStorage.setItem(STORAGE.settings, JSON.stringify(settings));
+  localStorage.setItem("gc_uvad_queues", JSON.stringify(selectedQueueIds));
+}
+
+async function openSettings() {
+  el("settingsModal").classList.add("active");
+  el("extensionIdInput").value = settings.extensionId || "";
+  const list = el("queueList");
+  list.innerHTML = "<div style='padding:8px;color:var(--muted)'>Loading queues…</div>";
+  try {
+    if (queuesById.size < 3) await fetchAllQueues();
+    const all = [...queuesById.values()].sort((a,b) => a.name.localeCompare(b.name));
+    list.innerHTML = all.map(q => {
+      const checked = selectedQueueIds.includes(q.id) ? "checked" : "";
+      return `<label class="queue-picker-item"><input type="checkbox" data-qid="${q.id}" ${checked}/> ${escape(q.name)}</label>`;
+    }).join("");
+    list.querySelectorAll("input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", async () => {
+        const qid = cb.dataset.qid;
+        if (cb.checked) { if (!selectedQueueIds.includes(qid)) selectedQueueIds.push(qid); }
+        else { selectedQueueIds = selectedQueueIds.filter(x => x !== qid); }
+        if (!activeTabQueueId || !selectedQueueIds.includes(activeTabQueueId)) activeTabQueueId = selectedQueueIds[0] || null;
+        saveSettings();
+        renderAll();
+        try { await refreshSubscriptions(); } catch {}
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<div style='padding:8px;color:var(--red)'>Queue load failed: ${escape(e.message)}</div>`;
+  }
+  el("extensionIdInput").oninput = () => { settings.extensionId = el("extensionIdInput").value.trim(); saveSettings(); };
+  el("settingsClose").onclick = () => el("settingsModal").classList.remove("active");
+}
+
+// ================================================================
+//  Row selection / context menu
+// ================================================================
+function wireRowSelection() {
+  document.addEventListener("click", (e) => {
+    const tr = e.target.closest("tr.row");
+    if (tr) {
+      selectedCallId = tr.dataset.id;
+      selectedCallScope = tr.dataset.scope;
+      renderAll();
+    }
+    const tab = e.target.closest(".tab");
+    if (tab) {
+      const closeBtn = e.target.closest(".close");
+      if (closeBtn) {
+        const qid = closeBtn.dataset.close;
+        selectedQueueIds = selectedQueueIds.filter(x => x !== qid);
+        if (activeTabQueueId === qid) activeTabQueueId = selectedQueueIds[0] || null;
+        saveSettings();
+        renderAll();
+        refreshSubscriptions().catch(()=>{});
+      } else {
+        activeTabQueueId = tab.dataset.qid;
+        renderAll();
+      }
+    }
+    const menu = el("ctxMenu");
+    if (!e.target.closest(".ctx-menu")) menu.classList.remove("active");
+  });
+  document.addEventListener("contextmenu", (e) => {
+    const tr = e.target.closest("tr.row");
+    if (!tr) return;
+    e.preventDefault();
+    selectedCallId = tr.dataset.id;
+    selectedCallScope = tr.dataset.scope;
+    renderAll();
+    showContextMenu(e.clientX, e.clientY);
+  });
+}
+
+function showContextMenu(x, y) {
+  const row = conversations.get(selectedCallId);
+  if (!row) return;
+  const menu = el("ctxMenu");
+  const items = [];
+  if (row.hasMe) {
+    items.push({ label: "Hold", act: row.state === "held" ? "unhold" : "hold" });
+    items.push({ label: "Mute", act: "mute" });
+    items.push({ label: "Transfer…", act: "transfer" });
+    items.push({ sep: true });
+    items.push({ label: "Disconnect", act: "disconnect", danger: true });
+  } else {
+    items.push({ label: "Pick Up", act: "pickup" });
+    items.push({ sep: true });
+    items.push({ label: "Listen", act: "listen" });
+    items.push({ label: "Coach", act: "coach" });
+    items.push({ label: "Join", act: "barge" });
+  }
+  menu.innerHTML = items.map(i => i.sep ? `<div class="sep"></div>` : `<div class="item" data-act="${i.act}" style="${i.danger ? 'color:var(--red)' : ''}">${i.label}</div>`).join("");
+  menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+  menu.querySelectorAll(".item").forEach(n => n.addEventListener("click", () => {
+    menu.classList.remove("active");
+    const r = conversations.get(selectedCallId);
+    if (r) doAction(n.dataset.act, r);
+  }));
+}
+
+// ================================================================
+//  Popout
+// ================================================================
+const POPOUT_KEY = "gc_uvad_popout_active";
+const POPOUT_CHANNEL = "gc_uvad_popout";
+let popoutWindow = null;
+let broadcastChannel = null;
+
+function isPopoutMode() { return new URLSearchParams(window.location.search).get("mode") === "popout"; }
+
+function initBroadcast() {
+  try {
+    broadcastChannel = new BroadcastChannel(POPOUT_CHANNEL);
+    broadcastChannel.onmessage = (e) => {
+      if (e.data === "popout-opened" && !isPopoutMode()) el("popoutPlaceholder").classList.add("active"), el("mainContent").style.display = "none";
+      else if (e.data === "popout-closed" && !isPopoutMode()) el("popoutPlaceholder").classList.remove("active"), el("mainContent").style.display = "";
+      else if (e.data === "popin-requested" && isPopoutMode()) window.close();
+    };
+  } catch {}
+}
+
+function buildPopoutUrl() {
+  const u = new URL(window.location.href);
+  u.searchParams.set("mode", "popout");
+  u.searchParams.delete("code"); u.searchParams.delete("state"); u.searchParams.delete("error");
+  return u.toString();
+}
+
+function openPopout(e) {
+  if (popoutWindow && !popoutWindow.closed) { e.preventDefault(); popoutWindow.focus(); return; }
+  const tok = sessionStorage.getItem(STORAGE.token);
+  const exp = sessionStorage.getItem(STORAGE.tokenExpiresAt);
+  if (tok) localStorage.setItem("gc_uvad_popout_token", tok);
+  if (exp) localStorage.setItem("gc_uvad_popout_token_expires", exp);
+  const url = buildPopoutUrl();
+  popoutWindow = window.open(url, "uvad_popout", "width=1100,height=780,menubar=no,toolbar=no,resizable=yes,scrollbars=yes");
+  if (popoutWindow) { e.preventDefault(); }
+  localStorage.setItem(POPOUT_KEY, "true");
+  if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
+  el("popoutPlaceholder").classList.add("active"); el("mainContent").style.display = "none";
+  const poll = setInterval(() => {
+    if (popoutWindow && popoutWindow.closed) {
+      clearInterval(poll);
+      popoutWindow = null;
+      localStorage.removeItem(POPOUT_KEY);
+      if (broadcastChannel) broadcastChannel.postMessage("popout-closed");
+      el("popoutPlaceholder").classList.remove("active"); el("mainContent").style.display = "";
+    }
+  }, 500);
+}
+
+function setupPopoutMode() {
+  const popToken = localStorage.getItem("gc_uvad_popout_token");
+  const popExp = localStorage.getItem("gc_uvad_popout_token_expires");
+  if (popToken && !sessionStorage.getItem(STORAGE.token)) {
+    sessionStorage.setItem(STORAGE.token, popToken);
+    if (popExp) sessionStorage.setItem(STORAGE.tokenExpiresAt, popExp);
+  }
+  const btn = el("popoutBtn");
+  if (btn) {
+    btn.textContent = "⤡ Pop In";
+    btn.title = "Return to iframe";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (broadcastChannel) broadcastChannel.postMessage("popin-requested");
+      localStorage.removeItem(POPOUT_KEY);
+      window.close();
+    });
+  }
+  if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
+}
+
+// ================================================================
+//  Init
+// ================================================================
+async function init() {
+  if (el("app-root").style.display !== "flex") return;
+  loadSettings();
+  initBroadcast();
+  if (isPopoutMode()) setupPopoutMode();
+
+  el("popoutBtn").addEventListener("mousedown", () => {
+    const tok = sessionStorage.getItem(STORAGE.token);
+    const exp = sessionStorage.getItem(STORAGE.tokenExpiresAt);
+    if (tok) localStorage.setItem("gc_uvad_popout_token", tok);
+    if (exp) localStorage.setItem("gc_uvad_popout_token_expires", exp);
+    el("popoutBtn").href = buildPopoutUrl();
+  });
+  if (!isPopoutMode()) el("popoutBtn").addEventListener("click", openPopout);
+
+  el("logoutBtn").addEventListener("click", () => { clearAuth(); setStatus("Logged out"); });
+  el("settingsBtn").addEventListener("click", openSettings);
+  el("addTabBtn").addEventListener("click", openSettings);
+
+  wireRowSelection();
+
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("code");
+  const oauthError = url.searchParams.get("error");
+  try {
+    if (oauthError) throw new Error(`OAuth error: ${oauthError}`);
+    if (code) { setStatus("Completing sign-in…"); await exchangeCodeForToken(code); }
+    if (!getToken()) { setStatus("Redirecting to sign-in…"); await startLogin(); return; }
+
+    setStatus("Loading…");
+    await fetchCurrentUser();
+    await seedMyInteractions();
+    if (!activeTabQueueId && selectedQueueIds.length > 0) activeTabQueueId = selectedQueueIds[0];
+    await ensureChannel();
+    await refreshSubscriptions();
+    startDurationTick();
+    renderAll();
+    setStatus("Live","ok");
+  } catch (e) {
+    if (e?.message === "AUTH_REDIRECT" || authRedirectInProgress) return;
+    console.error(e);
+    setStatus("Error","err");
+    showBanner({ type: "error", title: "Startup failed", message: e?.message || String(e) });
+  }
+}
+
+window.addEventListener("load", init);
+</script>
+</body>
+</html>
