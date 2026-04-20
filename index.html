@@ -101,13 +101,18 @@
     .right-col { flex: 0 0 280px; min-width: 240px; border-left: 1px solid var(--win-border);
       background: var(--win-panel); display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
     .right-col.collapsed { flex: 0 0 0; min-width: 0; border-left: none; }
-    .splitter-v { width: 4px; cursor: col-resize; background: var(--win-bg); flex: 0 0 4px; }
+    .splitter-v { width: 5px; cursor: col-resize; background: var(--win-bg); flex: 0 0 5px;
+      border-left: 1px solid var(--win-border-soft); border-right: 1px solid var(--win-border-soft); }
+    .splitter-v:hover, .splitter-v.dragging { background: #b8cce8; }
+    .splitter-h { height: 5px; cursor: row-resize; background: var(--win-bg); flex: 0 0 5px;
+      margin: 0 4px; border-top: 1px solid var(--win-border-soft); border-bottom: 1px solid var(--win-border-soft); }
+    .splitter-h:hover, .splitter-h.dragging { background: #b8cce8; }
 
     /* -------- Panels (listview containers) -------- */
     .panel { background: var(--win-panel); display: flex; flex-direction: column; overflow: hidden;
       border: 1px solid var(--win-border); min-height: 0; }
-    .my-panel { flex: 0 0 38%; margin: 4px 4px 2px 4px; }
-    .queue-panel { flex: 1; margin: 2px 4px 4px 4px; }
+    .my-panel { margin: 4px 4px 0 4px; flex: 0 0 38%; min-height: 80px; }
+    .queue-panel { flex: 1; margin: 0 4px 4px 4px; min-height: 120px; }
     .panel-head { display: flex; align-items: center; padding: 3px 8px; gap: 8px;
       background: var(--win-panel-head); border-bottom: 1px solid var(--win-border);
       font-size: 12px; font-weight: 600; color: #1e3a5f; flex: 0 0 auto; }
@@ -454,9 +459,9 @@
 
   <!-- MAIN CONTENT -->
   <div id="mainContent">
-    <div class="left-col">
+    <div class="left-col" id="leftCol">
       <!-- My Interactions -->
-      <div class="panel my-panel">
+      <div class="panel my-panel" id="myPanel">
         <div class="panel-head">
           <span class="title">My Interactions</span>
           <span class="sp"></span>
@@ -470,6 +475,9 @@
           <div class="empty-msg" id="myEmpty">No interactions</div>
         </div>
       </div>
+
+      <!-- Horizontal splitter between My and Queue -->
+      <div class="splitter-h" id="splitterH" title="Drag to resize"></div>
 
       <!-- Queue Panel with tabs -->
       <div class="panel queue-panel">
@@ -485,6 +493,9 @@
         </div>
       </div>
     </div>
+
+    <!-- Vertical splitter between left col and right sidebar -->
+    <div class="splitter-v" id="splitterV" title="Drag to resize"></div>
 
     <!-- Right sidebar -->
     <div class="right-col" id="rightCol">
@@ -530,7 +541,8 @@
     <div class="titlebar"><span>Settings</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
       <label>Monitored queues (checked queues open as tabs)</label>
-      <div id="queueList" style="max-height:40vh; overflow:auto; border:1px solid var(--win-border); background:#fff;"></div>
+      <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
+      <div id="queueList" style="max-height:40vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
       <label style="margin-top:12px">Alert-Extension-v2 ID (WebRTC pickup bridge)</label>
       <input type="text" id="extensionIdInput" placeholder="chrome://extensions → copy the ID" />
       <label style="margin-top:12px">Environment</label>
@@ -1075,6 +1087,66 @@ async function seedMyInteractions() {
     for (const c of r.entities || []) ingestConversation(c);
   } catch (e) { console.warn("seedMyInteractions failed", e); }
 }
+
+// Observations-query seed (matches IW-Merge pattern — WS topics don't backfill,
+// so we pull the current snapshot of waiting/interacting calls per queue and then
+// let the WS topic keep things fresh from there.)
+async function seedQueueCalls(queueId) {
+  try {
+    const body = {
+      filter: { type: "and", predicates: [
+        { type: "dimension", dimension: "queueId", operator: "matches", value: queueId }
+      ]},
+      metrics: ["oWaiting"],
+      detailMetrics: ["oWaiting"]
+    };
+    const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
+    const seen = new Set();
+    const convIds = [];
+    for (const result of (data?.results || [])) {
+      for (const d of (result?.data || [])) {
+        if (!Array.isArray(d.observations)) continue;
+        for (const obs of d.observations) {
+          if (!obs.conversationId || seen.has(obs.conversationId)) continue;
+          seen.add(obs.conversationId);
+          convIds.push(obs.conversationId);
+          // Create minimal placeholder row so the table renders immediately
+          const k = d.metric === "oOnHold" ? "held" : (d.metric === "oInteracting" ? "connected" : "offering");
+          const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
+          conversations.set(obs.conversationId, {
+            id: obs.conversationId,
+            name: obs.participantName || "",
+            number: obs.ani || obs.dnis || "",
+            queueId,
+            queueName: queuesById.get(queueId)?.name || queueId,
+            stateKey: k,
+            stateDisplay: k === "held" ? "Held" : k === "connected" ? "ACD – Assigned" : "ACD – Wait Agent",
+            held: k === "held",
+            assignedUserId: null,
+            assignedUserName: "",
+            startTimeMs: startMs, queueEnterMs: startMs, stateChangeMs: startMs,
+            hasMe: false, disconnected: false,
+            recording: false, monitored: false,
+            station: "", line: "", type: "voice",
+            details: [obs.participantName, obs.ani].filter(Boolean).join(" · "),
+            waitReason: "", accountCode: "", wrapupCode: "", subject: "",
+            raw: { id: obs.conversationId, participants: [] }
+          });
+        }
+      }
+    }
+    // Upgrade each placeholder with full participant data so actions work.
+    for (const id of convIds) {
+      apiFetch(`/api/v2/conversations/calls/${id}`)
+        .then(full => { ingestConversation(full); renderAll(); })
+        .catch(() => {});
+    }
+    renderAll();
+  } catch (e) {
+    console.warn("seedQueueCalls failed", queueId, e);
+    showBanner({ type: "warn", title: "Queue snapshot failed", message: e?.message || String(e), autoHideMs: 4000 });
+  }
+}
 async function fetchQueueMembers(queueId) {
   try {
     const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&expand=presence,routingStatus`);
@@ -1566,33 +1638,53 @@ async function openSettings() {
   openModal("settingsModal");
   el("extensionIdInput").value = settings.extensionId || "";
   el("envInput").value = CONFIG.environment;
+  el("queueSearch").value = "";
   const list = el("queueList");
   list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>Loading queues…</div>";
   try {
     if (queuesById.size < 3) await fetchAllQueues();
-    const all = [...queuesById.values()].sort((a, b) => a.name.localeCompare(b.name));
-    list.innerHTML = all.map(q => {
-      const checked = selectedQueueIds.includes(q.id) ? "checked" : "";
-      return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${checked}/> ${escape(q.name)}</label>`;
-    }).join("");
-    list.querySelectorAll("input[type=checkbox]").forEach(cb => {
-      cb.addEventListener("change", async () => {
-        const qid = cb.dataset.qid;
-        if (cb.checked) { if (!selectedQueueIds.includes(qid)) selectedQueueIds.push(qid); }
-        else { selectedQueueIds = selectedQueueIds.filter(x => x !== qid); }
-        if (!activeTabQueueId || !selectedQueueIds.includes(activeTabQueueId)) activeTabQueueId = selectedQueueIds[0] || null;
-        saveSettings();
-        if (activeTabQueueId) { fetchQueueMembers(activeTabQueueId).then(renderAll); }
-        renderAll();
-        try { await refreshSubscriptions(); } catch {}
-      });
-    });
+    renderQueueList("");
   } catch (e) {
     list.innerHTML = `<div style='padding:8px;color:#c00'>Queue load failed: ${escape(e.message)}</div>`;
   }
+  el("queueSearch").oninput = () => renderQueueList(el("queueSearch").value);
   el("extensionIdInput").oninput = () => { settings.extensionId = el("extensionIdInput").value.trim(); saveSettings(); };
   el("envInput").onchange = () => { CONFIG.environment = el("envInput").value.trim(); saveSettings(); };
   el("settingsClose").onclick = () => closeModal("settingsModal");
+}
+
+function renderQueueList(filter) {
+  const list = el("queueList");
+  const f = (filter || "").trim().toLowerCase();
+  const all = [...queuesById.values()]
+    .filter(q => !f || (q.name || "").toLowerCase().includes(f) || q.id.toLowerCase().includes(f))
+    .sort((a, b) => {
+      const aSel = selectedQueueIds.includes(a.id), bSel = selectedQueueIds.includes(b.id);
+      if (aSel !== bSel) return aSel ? -1 : 1;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  if (all.length === 0) { list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>No matches</div>"; return; }
+  list.innerHTML = all.map(q => {
+    const checked = selectedQueueIds.includes(q.id) ? "checked" : "";
+    return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${checked}/> ${escape(q.name)}</label>`;
+  }).join("");
+  list.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", async () => {
+      const qid = cb.dataset.qid;
+      if (cb.checked) { if (!selectedQueueIds.includes(qid)) selectedQueueIds.push(qid); }
+      else {
+        selectedQueueIds = selectedQueueIds.filter(x => x !== qid);
+        // Purge rows that belonged only to the unselected queue
+        for (const [id, r] of [...conversations]) if (r.queueId === qid && !r.hasMe) conversations.delete(id);
+      }
+      if (!activeTabQueueId || !selectedQueueIds.includes(activeTabQueueId)) activeTabQueueId = selectedQueueIds[0] || null;
+      saveSettings();
+      renderAll();
+      try { await refreshSubscriptions(); } catch {}
+      if (cb.checked) seedQueueCalls(qid).then(renderAll).catch(() => {});
+      if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+    });
+  });
 }
 
 // Columns customization
@@ -1737,6 +1829,7 @@ function wireRowSelection() {
       } else {
         activeTabQueueId = tab.dataset.qid;
         if (!queueMembers.has(activeTabQueueId)) fetchQueueMembers(activeTabQueueId).then(renderAll);
+        seedQueueCalls(activeTabQueueId).catch(() => {});
         refreshSubscriptions().catch(() => {});
         renderAll();
       }
@@ -1938,6 +2031,67 @@ function setupPopoutMode() {
 // ================================================================
 //  Init
 // ================================================================
+// ================================================================
+//  Splitters — resize my/queue panel & left/right columns
+// ================================================================
+function wireSplitters() {
+  // Horizontal splitter: resize .my-panel height (flex-basis on px)
+  const hs = el("splitterH");
+  if (hs) {
+    hs.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      hs.classList.add("dragging");
+      const panel = el("myPanel");
+      const left = el("leftCol");
+      const startY = e.clientY;
+      const startH = panel.getBoundingClientRect().height;
+      const maxH = left.getBoundingClientRect().height - 120;
+      const onMove = (ev) => {
+        let h = startH + (ev.clientY - startY);
+        h = Math.max(80, Math.min(maxH, h));
+        panel.style.flex = `0 0 ${h}px`;
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        hs.classList.remove("dragging");
+        localStorage.setItem("gc_uvad_myPanelPx", String(panel.getBoundingClientRect().height));
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    const saved = localStorage.getItem("gc_uvad_myPanelPx");
+    if (saved) el("myPanel").style.flex = `0 0 ${Number(saved)}px`;
+  }
+  // Vertical splitter: resize right-col width
+  const vs = el("splitterV");
+  if (vs) {
+    vs.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      if (el("rightCol").classList.contains("collapsed")) return;
+      vs.classList.add("dragging");
+      const rc = el("rightCol");
+      const startX = e.clientX;
+      const startW = rc.getBoundingClientRect().width;
+      const onMove = (ev) => {
+        let w = startW - (ev.clientX - startX);
+        w = Math.max(180, Math.min(window.innerWidth - 400, w));
+        rc.style.flex = `0 0 ${w}px`;
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        vs.classList.remove("dragging");
+        localStorage.setItem("gc_uvad_rightColPx", String(rc.getBoundingClientRect().width));
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    const saved = localStorage.getItem("gc_uvad_rightColPx");
+    if (saved) el("rightCol").style.flex = `0 0 ${Number(saved)}px`;
+  }
+}
+
 async function init() {
   if (el("app-root").style.display !== "flex") return;
 
@@ -1949,6 +2103,7 @@ async function init() {
   wireToolbar();
   wireRowSelection();
   wireDragDrop();
+  wireSplitters();
   startClock();
 
   if (localStorage.getItem(STORAGE.sidebarCollapsed) === "1") {
@@ -1969,12 +2124,16 @@ async function init() {
     if (code) { setStatus("Completing sign-in…"); await exchangeCodeForToken(code); }
     if (!getToken()) { setStatus("Redirecting to sign-in…"); await startLogin(); return; }
 
-    setStatus("Loading…");
+    setStatus("Loading queues…");
     await fetchCurrentUser();
+    // Fetch all queue names up front so tabs render names (not ids) on first paint.
+    fetchAllQueues().then(renderAll).catch((e) => console.warn("fetchAllQueues", e));
     await seedMyInteractions();
     if (!activeTabQueueId && selectedQueueIds.length > 0) activeTabQueueId = selectedQueueIds[0];
     await ensureChannel();
     await refreshSubscriptions();
+    // Seed every selected queue with current-call snapshot (WS doesn't backfill).
+    for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
     if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
     ensureMaxConf().catch(() => {});
     startDurationTick();
