@@ -5,141 +5,295 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>UVA Dashboard</title>
   <style>
+    /* ==========================================================
+       PureConnect Interaction Desktop 2023R3 visual reproduction.
+       Light Windows chrome, gradient titlebars, classic Win32
+       listview, blue row selection, classic menubar/toolbar/statusbar.
+       ========================================================== */
     :root {
-      --bg: #0f1115;
-      --panel: #151922;
-      --panel-2: #1b2030;
-      --border: #242a3a;
-      --text: #e6e9ef;
-      --muted: #8993a4;
-      --accent: #5aa9ff;
-      --accent-2: #7a8aff;
-      --green: #3ccf7a;
-      --amber: #f1b44c;
-      --red: #ef5b5b;
-      --hold: #ff9a3c;
-      --row-hover: #1f2538;
-      --row-selected: #27314b;
+      --win-bg: #ece9d8;
+      --win-panel: #ffffff;
+      --win-panel-head: linear-gradient(to bottom, #f0f4fa, #cad3e5);
+      --win-border: #a0a0a0;
+      --win-border-soft: #d4d0c8;
+      --win-text: #000000;
+      --win-muted: #555555;
+      --win-accent: #316ac5;
+      --win-accent-text: #ffffff;
+      --win-row-hover: #e5efff;
+      --win-header-bg: linear-gradient(to bottom, #fafafa, #e4e4e4);
+      --win-menu-hover: #cee2fc;
+      --state-connected: #006000;
+      --state-alerting: #cc6600;
+      --state-held: #b35900;
+      --state-disconnected: #808080;
+      --presence-available: #2e8b2e;
+      --presence-busy: #c40000;
+      --presence-away: #d89b00;
+      --presence-offline: #888888;
+      --presence-meeting: #7a3fb3;
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    html, body {
+      margin: 0; height: 100%; background: var(--win-bg); color: var(--win-text);
+      font: 12px/1.35 "Segoe UI", Tahoma, Arial, sans-serif;
+      overflow: hidden;
+    }
     #app-root { display: none; height: 100vh; flex-direction: column; }
-    #security-block { padding: 40px; text-align: center; color: var(--muted); }
+    #security-block { padding: 40px; text-align: center; color: var(--win-muted); }
 
-    /* Header */
-    header { display: flex; align-items: center; gap: 12px; padding: 8px 12px;
-      background: var(--panel); border-bottom: 1px solid var(--border); }
-    header h1 { margin: 0; font-size: 14px; font-weight: 600; }
-    header .sp { flex: 1; }
-    header .status-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-    .dot.connected { background: var(--green); }
-    .dot.warn { background: var(--amber); }
-    .dot.err { background: var(--red); }
+    /* -------- Menu bar -------- */
+    .menu-bar { display: flex; align-items: center; background: #f1f1f1;
+      border-bottom: 1px solid var(--win-border-soft); padding: 0 2px; height: 22px;
+      font-size: 12px; user-select: none; flex: 0 0 22px; position: relative; z-index: 10; }
+    .menu-bar .item { padding: 2px 10px; cursor: default; position: relative; }
+    .menu-bar .item:hover, .menu-bar .item.open { background: var(--win-menu-hover); }
+    .menu-bar .sp { flex: 1; }
+    .menu-bar .right { padding: 0 8px; color: var(--win-muted); font-size: 11px;
+      display: flex; align-items: center; gap: 6px; }
+    .menu-dropdown { position: absolute; top: 100%; left: 0; background: #f1f1f1;
+      border: 1px solid var(--win-border); min-width: 200px; padding: 2px 0;
+      box-shadow: 3px 3px 8px rgba(0,0,0,.25); display: none; z-index: 50; }
+    .menu-bar .item.open .menu-dropdown { display: block; }
+    .menu-dropdown .mi { padding: 4px 26px 4px 20px; cursor: default; display: flex; gap: 10px;
+      align-items: center; white-space: nowrap; }
+    .menu-dropdown .mi:hover { background: var(--win-accent); color: #fff; }
+    .menu-dropdown .mi.disabled { color: #a0a0a0; }
+    .menu-dropdown .mi.disabled:hover { background: transparent; color: #a0a0a0; }
+    .menu-dropdown .mi .shortcut { margin-left: auto; color: #777; font-size: 11px; }
+    .menu-dropdown .mi:hover .shortcut { color: #dfe; }
+    .menu-dropdown .sep { height: 1px; background: #c0c0c0; margin: 3px 0; }
 
-    /* Buttons */
-    .btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
-      padding: 5px 10px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
-    .btn:hover:not(:disabled) { background: var(--row-hover); }
-    .btn:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-primary { background: var(--accent); color: #001530; border-color: var(--accent); }
-    .btn-primary:hover:not(:disabled) { background: var(--accent-2); }
-    .btn-danger { background: transparent; color: var(--red); border-color: var(--red); }
-    .btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
-    .btn-sm { padding: 3px 8px; font-size: 11px; }
+    /* -------- Toolbar -------- */
+    .toolbar { display: flex; align-items: center; gap: 1px; padding: 2px 3px;
+      background: linear-gradient(to bottom, #f6f6f6, #dcdcdc);
+      border-bottom: 1px solid var(--win-border-soft); flex: 0 0 32px; overflow-x: auto; overflow-y: hidden; }
+    .toolbar .tbtn { display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 7px; background: transparent; border: 1px solid transparent;
+      border-radius: 2px; cursor: pointer; font: inherit; color: var(--win-text);
+      white-space: nowrap; font-size: 11px; height: 26px; }
+    .toolbar .tbtn:hover:not(:disabled) { background: #fff7d2; border-color: #c0b776; }
+    .toolbar .tbtn:active:not(:disabled) { background: #ffe8a0; }
+    .toolbar .tbtn:disabled { color: #a0a0a0; cursor: default; }
+    .toolbar .tbtn.active { background: #ffe8a0; border-color: #c0b776; }
+    .toolbar .tbtn svg { width: 16px; height: 16px; flex: 0 0 16px; }
+    .toolbar .tbtn:disabled svg { opacity: .45; }
+    .toolbar .sep { width: 1px; height: 22px; background: var(--win-border-soft); margin: 0 3px; flex: 0 0 1px; }
+    .toolbar .sp { flex: 1; }
 
-    /* Layout */
-    #mainContent { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-    .banner-host { padding: 0 12px; }
+    /* -------- Banner area -------- */
+    .banner-host { padding: 0 4px; flex: 0 0 auto; }
     .banner-host.hidden { display: none; }
-    .banner { background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-      padding: 8px 12px; margin-top: 8px; border-radius: 4px; display: flex; align-items: center; gap: 12px; }
-    .banner.warn { border-left-color: var(--amber); }
-    .banner.error { border-left-color: var(--red); }
+    .banner { background: #fffbd6; border: 1px solid #d4c97a; padding: 5px 10px;
+      margin: 4px 0; font-size: 12px; display: flex; align-items: center; gap: 10px; }
+    .banner.warn { background: #fff4d6; border-color: #d4a860; }
+    .banner.error { background: #ffe0e0; border-color: #c08080; }
     .banner-content { flex: 1; }
-    .banner-title { font-weight: 600; font-size: 12px; }
-    .banner-msg { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .banner-title { font-weight: 600; }
+    .banner-msg { color: var(--win-muted); margin-top: 2px; }
+    .banner-actions button { background: transparent; border: 1px solid transparent;
+      padding: 2px 8px; cursor: pointer; font: inherit; }
+    .banner-actions button:hover { background: #fff; border-color: #888; }
 
-    /* Panels */
-    .panels { flex: 1; display: flex; flex-direction: column; gap: 1px; overflow: hidden;
-      background: var(--border); }
-    .panel { background: var(--panel); display: flex; flex-direction: column; overflow: hidden; }
-    .panel.my-panel { flex: 0 0 36%; }
-    .panel.queue-panel { flex: 1; }
-    .panel-head { display: flex; align-items: center; padding: 6px 10px;
-      background: var(--panel-2); border-bottom: 1px solid var(--border); gap: 8px; }
-    .panel-head .title { font-weight: 600; font-size: 12px; text-transform: uppercase;
-      letter-spacing: .04em; color: var(--muted); }
+    /* -------- Main layout -------- */
+    #mainContent { flex: 1; display: flex; overflow: hidden; background: var(--win-bg); min-height: 0; }
+    .left-col { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .right-col { flex: 0 0 280px; min-width: 240px; border-left: 1px solid var(--win-border);
+      background: var(--win-panel); display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+    .right-col.collapsed { flex: 0 0 0; min-width: 0; border-left: none; }
+    .splitter-v { width: 4px; cursor: col-resize; background: var(--win-bg); flex: 0 0 4px; }
+
+    /* -------- Panels (listview containers) -------- */
+    .panel { background: var(--win-panel); display: flex; flex-direction: column; overflow: hidden;
+      border: 1px solid var(--win-border); min-height: 0; }
+    .my-panel { flex: 0 0 38%; margin: 4px 4px 2px 4px; }
+    .queue-panel { flex: 1; margin: 2px 4px 4px 4px; }
+    .panel-head { display: flex; align-items: center; padding: 3px 8px; gap: 8px;
+      background: var(--win-panel-head); border-bottom: 1px solid var(--win-border);
+      font-size: 12px; font-weight: 600; color: #1e3a5f; flex: 0 0 auto; }
+    .panel-head .title { white-space: nowrap; }
     .panel-head .sp { flex: 1; }
+    .panel-head .count { background: #d4e0f5; border: 1px solid #8aa8d8; padding: 0 6px;
+      border-radius: 2px; font-size: 11px; font-weight: normal; color: #1e3a5f; }
+    .panel-head .phbtn { background: transparent; border: 1px solid transparent; cursor: pointer;
+      padding: 1px 5px; font: inherit; color: #1e3a5f; border-radius: 2px; }
+    .panel-head .phbtn:hover { background: var(--win-menu-hover); border-color: #8aa8d8; }
 
-    /* Tab bar */
-    .tab-bar { display: flex; gap: 2px; overflow-x: auto; }
-    .tab { padding: 4px 10px; background: var(--panel); border: 1px solid var(--border);
-      border-bottom: none; font-size: 11px; cursor: pointer; border-radius: 4px 4px 0 0;
-      display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-    .tab.active { background: var(--row-selected); color: var(--text); }
-    .tab .close { opacity: .5; }
-    .tab .close:hover { opacity: 1; color: var(--red); }
-    .tab .count { background: var(--panel-2); padding: 0 5px; border-radius: 8px; font-size: 10px; }
+    /* -------- Queue tabs (below panel head) -------- */
+    .tab-bar { display: flex; gap: 0; align-items: flex-end; flex: 1; overflow-x: auto;
+      border-bottom: 1px solid var(--win-border); background: var(--win-panel-head);
+      padding: 2px 2px 0 4px; flex: 0 0 22px; }
+    .tab { padding: 2px 10px 3px; background: linear-gradient(to bottom, #f0f0f0, #cfcfcf);
+      border: 1px solid var(--win-border); border-bottom: none; font-size: 11px; cursor: pointer;
+      border-radius: 3px 3px 0 0; display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap; color: var(--win-text); margin-right: 1px; }
+    .tab.active { background: linear-gradient(to bottom, #ffffff, #f4f7fd); font-weight: 600;
+      padding-bottom: 4px; position: relative; z-index: 2; }
+    .tab .close { opacity: .55; font-size: 10px; margin-left: 2px; }
+    .tab .close:hover { opacity: 1; color: #c00000; }
+    .tab .count { background: #d4e0f5; border: 1px solid #8aa8d8; padding: 0 4px;
+      border-radius: 2px; font-size: 10px; color: #1e3a5f; }
+    .add-tab { padding: 3px 10px; background: transparent; border: 1px solid transparent;
+      cursor: pointer; font-size: 11px; color: #1e3a5f; }
+    .add-tab:hover { background: var(--win-menu-hover); border: 1px solid #a0b8d8; border-radius: 2px; }
 
-    /* Table */
-    .rows { flex: 1; overflow-y: auto; font-size: 12px; }
-    table.rows-table { width: 100%; border-collapse: collapse; }
-    table.rows-table th { position: sticky; top: 0; background: var(--panel-2);
-      text-align: left; padding: 5px 8px; font-weight: 600; font-size: 11px;
-      color: var(--muted); text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--border); }
-    table.rows-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-    table.rows-table tr { cursor: pointer; }
-    table.rows-table tr:hover td { background: var(--row-hover); }
-    table.rows-table tr.selected td { background: var(--row-selected); }
-    .state-pill { padding: 1px 6px; font-size: 10px; border-radius: 3px;
-      background: var(--panel-2); color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
-    .state-pill.connected { background: rgba(60,207,122,.18); color: var(--green); }
-    .state-pill.alerting { background: rgba(241,180,76,.18); color: var(--amber); }
-    .state-pill.dialing, .state-pill.contacting { background: rgba(122,138,255,.18); color: var(--accent-2); }
-    .state-pill.held { background: rgba(255,154,60,.18); color: var(--hold); }
-    .state-pill.disconnected { background: rgba(239,91,91,.18); color: var(--red); }
-    .state-pill.offering { background: rgba(90,169,255,.18); color: var(--accent); }
+    /* -------- Classic Win32 listview -------- */
+    .rows-wrap { flex: 1; overflow: auto; background: var(--win-panel); min-height: 0; position: relative; }
+    table.rows-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+    table.rows-table th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--win-header-bg);
+      border-right: 1px solid var(--win-border-soft);
+      border-bottom: 1px solid var(--win-border);
+      padding: 3px 8px; font-weight: normal; text-align: left; color: var(--win-text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      cursor: context-menu; user-select: none;
+    }
+    table.rows-table th.icon-col { padding: 3px 4px; text-align: center; }
+    table.rows-table td { padding: 2px 8px; border-bottom: 1px dotted #e0e0e0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    table.rows-table td.icon-col { padding: 2px 4px; text-align: center; }
+    table.rows-table tr { cursor: default; }
+    table.rows-table tr:hover td { background: var(--win-row-hover); }
+    table.rows-table tr.selected td { background: var(--win-accent); color: var(--win-accent-text); }
+    table.rows-table tr.selected td .state-text,
+    table.rows-table tr.selected td .ico-color { color: var(--win-accent-text); fill: currentColor; }
+    table.rows-table tr.drop-target td { outline: 2px dashed #316ac5; outline-offset: -2px; }
 
-    .empty-msg { color: var(--muted); text-align: center; padding: 20px; font-size: 12px; }
+    /* Row state text styling */
+    .state-text { display: inline-flex; align-items: center; gap: 4px; }
+    .state-text.connected { color: var(--state-connected); }
+    .state-text.alerting { color: var(--state-alerting); font-weight: 600; }
+    .state-text.held { color: var(--state-held); font-weight: 600; }
+    .state-text.disconnected { color: var(--state-disconnected); }
+    .state-text.offering, .state-text.dialing, .state-text.contacting { color: #555; }
 
-    /* Action toolbar */
-    .action-bar { display: flex; gap: 4px; padding: 6px 10px;
-      background: var(--panel-2); border-top: 1px solid var(--border); flex-wrap: wrap; }
-    .action-bar .btn { padding: 4px 8px; font-size: 11px; }
-    .action-bar .sep { width: 1px; background: var(--border); margin: 0 2px; }
+    .empty-msg { color: var(--win-muted); text-align: center; padding: 16px; font-size: 12px; font-style: italic; }
 
-    /* Modals */
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55);
-      display: none; align-items: center; justify-content: center; z-index: 100; }
+    /* -------- Right sidebar panels (stats + directory) -------- */
+    .side-panel { display: flex; flex-direction: column; border-bottom: 1px solid var(--win-border); min-height: 0; }
+    .side-panel:last-child { border-bottom: none; }
+    .side-panel.stats-panel { flex: 0 0 50%; }
+    .side-panel.dir-panel { flex: 1; }
+    .side-head { padding: 4px 8px; font-size: 11px; font-weight: 600; color: #1e3a5f;
+      background: var(--win-panel-head); border-bottom: 1px solid var(--win-border);
+      display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .side-head .sp { flex: 1; }
+    .side-body { flex: 1; overflow: auto; min-height: 0; }
+
+    /* Stats groups */
+    .stats-group { border-bottom: 1px solid var(--win-border-soft); }
+    .stats-group-title { background: linear-gradient(to bottom, #fafafa, #e8e8e8);
+      padding: 3px 8px; font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--win-border-soft);
+      display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+    .stats-group-title .expander { color: #777; width: 10px; text-align: center; }
+    .stats-group.collapsed .stats-items { display: none; }
+    .stats-row { display: flex; align-items: center; padding: 2px 8px 2px 22px; font-size: 11px; }
+    .stats-row .label { flex: 1; color: #333; }
+    .stats-row .value { font-weight: 600; color: #000; min-width: 32px; text-align: right;
+      font-variant-numeric: tabular-nums; }
+
+    /* Directory rows */
+    .dir-row { display: flex; align-items: center; padding: 2px 8px; gap: 6px;
+      font-size: 11px; border-bottom: 1px dotted #eee; cursor: default; }
+    .dir-row:hover { background: var(--win-row-hover); }
+    .dir-row.selected { background: var(--win-accent); color: #fff; }
+    .dir-row .p-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px;
+      border: 1px solid rgba(0,0,0,.25); }
+    .dir-row .p-dot.available { background: var(--presence-available); }
+    .dir-row .p-dot.busy { background: var(--presence-busy); }
+    .dir-row .p-dot.away { background: var(--presence-away); }
+    .dir-row .p-dot.offline { background: var(--presence-offline); }
+    .dir-row .p-dot.meeting { background: var(--presence-meeting); }
+    .dir-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dir-row .rstatus { color: #777; font-size: 10px; font-variant-numeric: tabular-nums; }
+    .dir-row.selected .rstatus { color: #c0d6ff; }
+
+    /* -------- Status bar -------- */
+    .statusbar { display: flex; align-items: center; padding: 2px 0; background: #ece9d8;
+      border-top: 1px solid var(--win-border-soft); font-size: 11px; color: var(--win-muted);
+      height: 22px; flex: 0 0 22px; }
+    .statusbar .chunk { padding: 0 8px; border-right: 1px solid var(--win-border-soft);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .statusbar .chunk:last-child { border-right: none; }
+    .statusbar .sp { flex: 1; border-right: none; }
+    .statusbar .p-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+      margin-right: 4px; vertical-align: middle; border: 1px solid rgba(0,0,0,.25); }
+    .statusbar .p-dot.available { background: var(--presence-available); }
+    .statusbar .p-dot.busy { background: var(--presence-busy); }
+    .statusbar .p-dot.away { background: var(--presence-away); }
+    .statusbar .p-dot.offline { background: var(--presence-offline); }
+    .statusbar .p-dot.meeting { background: var(--presence-meeting); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #888; }
+    .dot.connected { background: var(--state-connected); }
+    .dot.warn { background: #e6a300; }
+    .dot.err { background: #c00000; }
+
+    /* -------- Modals (classic Windows dialog) -------- */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35);
+      display: none; align-items: center; justify-content: center; z-index: 500; }
     .modal-backdrop.active { display: flex; }
-    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
-      padding: 16px; min-width: 360px; max-width: 520px; max-height: 80vh; overflow: auto; }
-    .modal h2 { margin: 0 0 12px; font-size: 14px; }
-    .modal label { display: block; color: var(--muted); font-size: 11px; margin: 8px 0 4px; }
-    .modal input[type="text"], .modal select, .modal textarea {
-      width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-      padding: 6px 8px; border-radius: 4px; font: inherit; }
-    .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-    .queue-picker-item { padding: 6px 8px; display: flex; align-items: center; gap: 8px;
-      border-bottom: 1px solid var(--border); cursor: pointer; }
-    .queue-picker-item:hover { background: var(--row-hover); }
+    .modal { background: #f5f5f5; border: 1px solid var(--win-border);
+      box-shadow: 2px 2px 10px rgba(0,0,0,.35); min-width: 380px; max-width: 620px;
+      max-height: 85vh; display: flex; flex-direction: column; }
+    .modal .titlebar { background: linear-gradient(to bottom, #316ac5, #2252a8);
+      color: #fff; padding: 4px 10px; font-weight: 600; font-size: 12px;
+      display: flex; align-items: center; }
+    .modal .titlebar .sp { flex: 1; }
+    .modal .titlebar .x { cursor: pointer; padding: 0 6px; font-weight: bold; }
+    .modal .titlebar .x:hover { background: #c00000; }
+    .modal .body { padding: 12px; overflow: auto; flex: 1; }
+    .modal label { display: block; color: var(--win-muted); font-size: 11px; margin: 8px 0 4px; }
+    .modal input[type="text"], .modal input[type="tel"], .modal select, .modal textarea {
+      width: 100%; background: #fff; border: 1px solid #7a7a7a; color: var(--win-text);
+      padding: 3px 5px; font: inherit; }
+    .modal .actions { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 12px;
+      background: #ece9d8; border-top: 1px solid var(--win-border-soft); flex: 0 0 auto; }
+    .btn { background: linear-gradient(to bottom, #fcfcfc, #d4d4d4); color: var(--win-text);
+      border: 1px solid #707070; padding: 3px 14px; cursor: pointer; font: inherit; font-size: 12px;
+      min-width: 70px; }
+    .btn:hover:not(:disabled) { border-color: #3c7fb1; background: linear-gradient(to bottom, #fff, #e5f1fb); }
+    .btn:active:not(:disabled) { background: linear-gradient(to bottom, #d4d4d4, #fcfcfc); }
+    .btn:disabled { color: #a0a0a0; cursor: default; }
+    .btn-primary { font-weight: 600; }
+    .btn-sm { min-width: 0; padding: 2px 8px; }
 
-    /* Context menu */
-    .ctx-menu { position: fixed; background: var(--panel); border: 1px solid var(--border);
-      border-radius: 4px; padding: 4px 0; min-width: 180px; z-index: 200; display: none;
-      box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+    /* Modal internal tabs (consult transfer) */
+    .mtabs { display: flex; border-bottom: 1px solid var(--win-border); margin-bottom: 8px; }
+    .mtab { padding: 4px 12px; border: 1px solid transparent; border-bottom: none; cursor: pointer;
+      background: #e4e4e4; margin-right: 2px; border-radius: 3px 3px 0 0; font-size: 11px; }
+    .mtab.active { background: #fff; border-color: var(--win-border); border-bottom: 1px solid #fff;
+      margin-bottom: -1px; font-weight: 600; }
+    .mpanel { display: none; }
+    .mpanel.active { display: block; }
+
+    .queue-picker-item { padding: 4px 8px; display: flex; align-items: center; gap: 6px;
+      border-bottom: 1px dotted #d0d0d0; cursor: default; background: #fff; }
+    .queue-picker-item:hover { background: var(--win-row-hover); }
+
+    /* -------- Context menu (row + column) -------- */
+    .ctx-menu { position: fixed; background: #f1f1f1; border: 1px solid var(--win-border);
+      padding: 2px 0; min-width: 160px; z-index: 800; display: none;
+      box-shadow: 3px 3px 6px rgba(0,0,0,.3); font-size: 12px; }
     .ctx-menu.active { display: block; }
-    .ctx-menu .item { padding: 6px 12px; cursor: pointer; font-size: 12px; }
-    .ctx-menu .item:hover { background: var(--row-hover); }
-    .ctx-menu .item.disabled { color: var(--muted); cursor: not-allowed; }
-    .ctx-menu .item.disabled:hover { background: transparent; }
-    .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
+    .ctx-menu .item { padding: 3px 18px; cursor: default; display: flex; align-items: center; gap: 8px; }
+    .ctx-menu .item:hover { background: var(--win-accent); color: #fff; }
+    .ctx-menu .item.disabled { color: #a0a0a0; }
+    .ctx-menu .item.disabled:hover { background: transparent; color: #a0a0a0; }
+    .ctx-menu .item .check { width: 12px; display: inline-block; text-align: center; }
+    .ctx-menu .sep { height: 1px; background: #c0c0c0; margin: 3px 0; }
+    .ctx-menu .item.danger { color: #c00000; }
+    .ctx-menu .item.danger:hover { background: #c00000; color: #fff; }
 
     /* Popout placeholder */
-    #popoutPlaceholder { display: none; padding: 40px; text-align: center; color: var(--muted); }
-    #popoutPlaceholder.active { display: block; }
+    #popoutPlaceholder { display: none; padding: 40px; text-align: center; color: var(--win-muted); background: #fff; }
+    #popoutPlaceholder.active { display: block; flex: 1; }
+
+    /* Row drag preview */
+    .drag-preview { position: fixed; background: #fff; border: 1px solid var(--win-accent);
+      padding: 3px 8px; font-size: 11px; pointer-events: none; z-index: 900;
+      box-shadow: 2px 2px 6px rgba(0,0,0,.3); display: none; }
+    .drag-preview.active { display: block; }
   </style>
 </head>
 <body>
@@ -147,104 +301,362 @@
 <div id="security-block">Loading security gate…</div>
 
 <div id="app-root">
-  <header>
-    <h1>UVA Dashboard</h1>
-    <div class="sp"></div>
-    <div class="status-wrap"><span id="statusDot" class="dot"></span><span id="statusText">Initializing…</span></div>
-    <button id="settingsBtn" class="btn btn-sm" title="Configure queues">⚙</button>
-    <a id="popoutBtn" class="btn btn-sm" href="#" target="_blank" rel="noopener" title="Pop out to own window">⤢ Pop Out</a>
-    <button id="logoutBtn" class="btn btn-ghost btn-sm" title="Log out">Logout</button>
-  </header>
 
+  <!-- MENU BAR -->
+  <div class="menu-bar" id="menuBar">
+    <div class="item" data-menu="file">File
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="makeCall">New Call…<span class="shortcut">Ctrl+M</span></div>
+        <div class="sep"></div>
+        <div class="mi" data-cmd="popout">Open In New Window</div>
+        <div class="sep"></div>
+        <div class="mi" data-cmd="logout">Log Off</div>
+      </div>
+    </div>
+    <div class="item" data-menu="edit">Edit
+      <div class="menu-dropdown">
+        <div class="mi disabled">Cut<span class="shortcut">Ctrl+X</span></div>
+        <div class="mi disabled">Copy<span class="shortcut">Ctrl+C</span></div>
+        <div class="mi disabled">Paste<span class="shortcut">Ctrl+V</span></div>
+        <div class="sep"></div>
+        <div class="mi" data-cmd="settings">Preferences…</div>
+      </div>
+    </div>
+    <div class="item" data-menu="view">View
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="toggleSidebar"><span class="check" id="checkSidebar">✓</span>Workgroup Statistics</div>
+        <div class="mi" data-cmd="toggleDirectory"><span class="check" id="checkDir">✓</span>Directory</div>
+        <div class="sep"></div>
+        <div class="mi" data-cmd="customizeCols">Customize Columns…</div>
+        <div class="mi" data-cmd="reload">Refresh</div>
+      </div>
+    </div>
+    <div class="item" data-menu="workspaces">Workspaces
+      <div class="menu-dropdown">
+        <div class="mi">Default Workspace</div>
+        <div class="sep"></div>
+        <div class="mi disabled">Manage Workspaces…</div>
+      </div>
+    </div>
+    <div class="item" data-menu="tools">Tools
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="settings">Settings…</div>
+        <div class="mi" data-cmd="reload">Reconnect</div>
+      </div>
+    </div>
+    <div class="item" data-menu="options">Options
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="settings">Configuration…</div>
+      </div>
+    </div>
+    <div class="item" data-menu="window">Window
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="popout">Pop Out</div>
+        <div class="mi" data-cmd="popin">Pop In</div>
+      </div>
+    </div>
+    <div class="item" data-menu="help">Help
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="about">About UVA Dashboard</div>
+      </div>
+    </div>
+    <div class="sp"></div>
+    <div class="right">
+      <span id="statusDot" class="dot"></span>
+      <span id="statusText">Initializing…</span>
+    </div>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar" id="toolbar">
+    <button class="tbtn" data-act="makeCall" title="Make Call (Ctrl+M)">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M3 3c0-.6.4-1 1-1h2.3l1.4 3.5-1.8 1.1a10 10 0 0 0 4.5 4.5l1.1-1.8L15 10.7V13c0 .6-.4 1-1 1C7 14 2 9 2 2c0-.6.4-1 1-1h0z"/></svg>
+      Make Call
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="pickup" title="Pick Up selected queue call">
+      <svg viewBox="0 0 16 16"><path fill="#080" d="M8 1v7l3-3 1 1-5 5-5-5 1-1 3 3V1h2zm-6 12h12v2H2z"/></svg>
+      Pickup
+    </button>
+    <button class="tbtn" data-act="hold" title="Hold / Unhold">
+      <svg viewBox="0 0 16 16"><path fill="#c60" d="M4 3h3v10H4V3zm5 0h3v10H9V3z"/></svg>
+      Hold
+    </button>
+    <button class="tbtn" data-act="mute" title="Mute">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 2a3 3 0 0 0-3 3v3a3 3 0 1 0 6 0V5a3 3 0 0 0-3-3zm-5 6a5 5 0 0 0 4 4.9V15h2v-2.1A5 5 0 0 0 13 8h-2a3 3 0 0 1-6 0H3z"/><path stroke="#c00" stroke-width="1.8" d="M2 2l12 12"/></svg>
+      Mute
+    </button>
+    <button class="tbtn" data-act="private" title="Secure Pause recording">
+      <svg viewBox="0 0 16 16"><path fill="#b35" d="M8 1a4 4 0 0 0-4 4v2H3v8h10V7h-1V5a4 4 0 0 0-4-4zm0 2a2 2 0 0 1 2 2v2H6V5a2 2 0 0 1 2-2z"/></svg>
+      Private
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="transfer" title="Blind transfer">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M1 7h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V7z"/></svg>
+      Transfer
+    </button>
+    <button class="tbtn" data-act="consult" title="Consult transfer">
+      <svg viewBox="0 0 16 16"><path fill="#069" d="M1 5h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V5zm0 6h8v2H1v-2z"/></svg>
+      Consult
+    </button>
+    <button class="tbtn" data-act="voicemail" title="Send to voicemail">
+      <svg viewBox="0 0 16 16"><circle cx="4" cy="10" r="3" fill="none" stroke="#000"/><circle cx="12" cy="10" r="3" fill="none" stroke="#000"/><path stroke="#000" d="M4 10h8"/></svg>
+      Voicemail
+    </button>
+    <button class="tbtn" data-act="disconnect" title="Disconnect (Ctrl+D)">
+      <svg viewBox="0 0 16 16"><path fill="#c00" d="M3 7c3-4 7-4 10 0l-2 2a3 3 0 0 0-2-1v2l-2 1-2-1V8a3 3 0 0 0-2 1L3 7z" transform="rotate(135 8 8)"/></svg>
+      Disconnect
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="barge" title="Join / Barge into call">
+      <svg viewBox="0 0 16 16"><path fill="#060" d="M5 2h2v5h5v2H7v5H5V9H0V7h5V2zm8 0h2v12h-2V2z"/></svg>
+      Join
+    </button>
+    <button class="tbtn" data-act="listen" title="Silent monitor">
+      <svg viewBox="0 0 16 16"><path fill="#036" d="M8 2a4 4 0 0 0-4 4v4a4 4 0 0 0 1 2.6V15h1v-2h4v2h1v-2.4A4 4 0 0 0 12 10V6a4 4 0 0 0-4-4z"/></svg>
+      Listen
+    </button>
+    <button class="tbtn" data-act="coach" title="Coach (whisper)">
+      <svg viewBox="0 0 16 16"><path fill="#606" d="M3 3h10l-1 6H5l-1-2H2V5h2l-1-2zm2 8a2 2 0 1 0 2 2h-2v-2z"/></svg>
+      Coach
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="record" title="Start / stop recording">
+      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#c00"/></svg>
+      Record
+    </button>
+    <button class="tbtn" data-act="pause" title="Secure pause (mask PCI)">
+      <svg viewBox="0 0 16 16"><path fill="#b35" d="M5 3h2v10H5V3zm4 0h2v10H9V3z"/></svg>
+      Pause
+    </button>
+    <button class="tbtn" data-act="wrapup" title="Wrap-up code">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M2 3h12v10H2V3zm1 2v7h10V5H3zm2 1h6v1H5V6zm0 2h6v1H5V8zm0 2h4v1H5v-1z"/></svg>
+      Wrap-up
+    </button>
+    <span class="sp"></span>
+    <button class="tbtn" data-act="settings" title="Settings">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6 3l-1.3-.3-.3-.8.7-1.2-1.2-1.2-1.2.7-.8-.3L9.5 4h-3l-.3 1.3-.8.3-1.2-.7-1.2 1.2.7 1.2-.3.8L2 8v2l1.3.3.3.8-.7 1.2 1.2 1.2 1.2-.7.8.3L6.5 14h3l.3-1.3.8-.3 1.2.7 1.2-1.2-.7-1.2.3-.8L14 9V8z"/></svg>
+    </button>
+    <button class="tbtn" data-act="popout" title="Pop out / Pop in" id="popoutBtn">
+      <svg viewBox="0 0 16 16"><path fill="none" stroke="#000" d="M2 2h7v2M9 2v5H2V2zm5 5V2h-5l2 2-4 4 1 1 4-4 2 2z"/></svg>
+      Pop Out
+    </button>
+  </div>
+
+  <!-- BANNER -->
   <div id="bannerHost" class="banner-host hidden"></div>
 
+  <!-- POPOUT PLACEHOLDER -->
   <div id="popoutPlaceholder">
     <p>The UVA Dashboard is open in a separate window.</p>
     <button id="popinFromPlaceholder" class="btn btn-primary">Return Here</button>
   </div>
 
+  <!-- MAIN CONTENT -->
   <div id="mainContent">
-    <div class="panels">
-      <!-- MY INTERACTIONS -->
+    <div class="left-col">
+      <!-- My Interactions -->
       <div class="panel my-panel">
         <div class="panel-head">
           <span class="title">My Interactions</span>
           <span class="sp"></span>
-          <span id="myCount" class="btn-ghost btn-sm" style="font-size:11px">0</span>
+          <span class="count" id="myCount">0</span>
         </div>
-        <div class="rows">
+        <div class="rows-wrap">
           <table class="rows-table" id="myTable">
-            <thead><tr>
-              <th>Name</th><th>Number</th><th>Queue</th><th>State</th><th>Duration</th>
-            </tr></thead>
+            <thead><tr id="myHead"></tr></thead>
             <tbody id="myBody"></tbody>
           </table>
           <div class="empty-msg" id="myEmpty">No interactions</div>
         </div>
-        <div class="action-bar" id="myActions"></div>
       </div>
 
-      <!-- QUEUE PANEL -->
+      <!-- Queue Panel with tabs -->
       <div class="panel queue-panel">
-        <div class="panel-head">
-          <div class="tab-bar" id="tabBar"></div>
-          <span class="sp"></span>
-          <button id="addTabBtn" class="btn btn-sm" title="Add queue tab">+ Queue</button>
+        <div class="tab-bar" id="tabBar">
+          <button class="add-tab" id="addTabBtn">+ Queue</button>
         </div>
-        <div class="rows">
+        <div class="rows-wrap">
           <table class="rows-table" id="queueTable">
-            <thead><tr>
-              <th>Name</th><th>Number</th><th>Queue</th><th>State</th><th>Assigned</th><th>Duration</th>
-            </tr></thead>
+            <thead><tr id="queueHead"></tr></thead>
             <tbody id="queueBody"></tbody>
           </table>
           <div class="empty-msg" id="queueEmpty">No queue selected — click + Queue</div>
         </div>
-        <div class="action-bar" id="queueActions"></div>
+      </div>
+    </div>
+
+    <!-- Right sidebar -->
+    <div class="right-col" id="rightCol">
+      <div class="side-panel stats-panel" id="statsPanel">
+        <div class="side-head">
+          <span>Workgroup Statistics</span>
+          <span class="sp"></span>
+          <span class="count" id="statsQueueName">—</span>
+        </div>
+        <div class="side-body" id="statsBody">
+          <div class="empty-msg">Select a queue tab to see stats</div>
+        </div>
+      </div>
+      <div class="side-panel dir-panel" id="dirPanel">
+        <div class="side-head">
+          <span>Directory</span>
+          <span class="sp"></span>
+          <span class="count" id="dirCount">0</span>
+        </div>
+        <div class="side-body" id="dirBody">
+          <div class="empty-msg">Select a queue to load members</div>
+        </div>
       </div>
     </div>
   </div>
+
+  <!-- STATUS BAR -->
+  <div class="statusbar" id="statusBar">
+    <span class="chunk" id="sbUser">—</span>
+    <span class="chunk"><span class="p-dot offline" id="sbPresenceDot"></span><span id="sbPresence">Offline</span></span>
+    <span class="chunk" id="sbRouting">Routing: —</span>
+    <span class="chunk" id="sbStation">Station: —</span>
+    <span class="chunk" id="sbEnv">—</span>
+    <span class="chunk sp"></span>
+    <span class="chunk" id="sbConnected">Connecting…</span>
+    <span class="chunk" id="sbClock">—</span>
+  </div>
 </div>
 
-<!-- Settings modal -->
+<!-- SETTINGS MODAL -->
 <div id="settingsModal" class="modal-backdrop">
   <div class="modal">
-    <h2>Settings</h2>
-    <label>Monitored queues (click to toggle; active queues open as tabs)</label>
-    <div id="queueList" style="max-height:40vh; overflow:auto; border:1px solid var(--border); border-radius:4px;"></div>
-    <label style="margin-top:12px">Alert-Extension-v2 ID (for WebRTC pickup — find in chrome://extensions)</label>
-    <input type="text" id="extensionIdInput" placeholder="(leave blank to disable click-injection)" />
+    <div class="titlebar"><span>Settings</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Monitored queues (checked queues open as tabs)</label>
+      <div id="queueList" style="max-height:40vh; overflow:auto; border:1px solid var(--win-border); background:#fff;"></div>
+      <label style="margin-top:12px">Alert-Extension-v2 ID (WebRTC pickup bridge)</label>
+      <input type="text" id="extensionIdInput" placeholder="chrome://extensions → copy the ID" />
+      <label style="margin-top:12px">Environment</label>
+      <input type="text" id="envInput" value="usw2.pure.cloud" />
+    </div>
     <div class="actions">
-      <button class="btn" id="settingsClose">Close</button>
+      <button class="btn btn-primary" id="settingsClose">OK</button>
     </div>
   </div>
 </div>
 
-<!-- Transfer modal -->
+<!-- BLIND TRANSFER MODAL -->
 <div id="transferModal" class="modal-backdrop">
   <div class="modal">
-    <h2>Transfer</h2>
-    <label>Destination (phone number, user email, or queue name)</label>
-    <input type="text" id="transferTo" />
+    <div class="titlebar"><span>Blind Transfer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Destination (phone number, user email, or queue name)</label>
+      <input type="text" id="transferTo" placeholder="+15555551212 or user@example.com" />
+    </div>
     <div class="actions">
-      <button class="btn" id="transferCancel">Cancel</button>
+      <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="transferGo">Transfer</button>
     </div>
   </div>
 </div>
 
-<!-- Context menu -->
+<!-- CONSULT TRANSFER MODAL -->
+<div id="consultModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Consult Transfer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <div class="mtabs" id="consultTabs">
+        <div class="mtab active" data-mt="agent">Agent</div>
+        <div class="mtab" data-mt="queue">Queue</div>
+        <div class="mtab" data-mt="external">External</div>
+      </div>
+      <div class="mpanel active" data-mp="agent">
+        <label>Agent email or user id</label>
+        <input type="text" id="consultAgent" placeholder="user@example.com" />
+      </div>
+      <div class="mpanel" data-mp="queue">
+        <label>Queue</label>
+        <select id="consultQueue"></select>
+      </div>
+      <div class="mpanel" data-mp="external">
+        <label>External number</label>
+        <input type="tel" id="consultExt" placeholder="+15555551212" />
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="consultGo">Consult</button>
+    </div>
+  </div>
+</div>
+
+<!-- OUTBOUND CALL MODAL -->
+<div id="outboundModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Make Call</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Phone number</label>
+      <input type="tel" id="outboundNumber" placeholder="+15555551212" />
+      <label>Caller ID queue (optional — dials from queue's outbound number)</label>
+      <select id="outboundQueue"><option value="">(personal)</option></select>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="outboundGo">Dial</button>
+    </div>
+  </div>
+</div>
+
+<!-- WRAPUP MODAL -->
+<div id="wrapupModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Wrap-up</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Wrap-up code</label>
+      <select id="wrapupCode"></select>
+      <label>Notes (optional)</label>
+      <textarea id="wrapupNotes" rows="3"></textarea>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="wrapupGo">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- COLUMN CUSTOMIZATION MODAL -->
+<div id="colsModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Customize Columns</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>My Interactions columns</label>
+      <div id="colsMyList" style="max-height:28vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <label style="margin-top:12px">Queue columns</label>
+      <div id="colsQueueList" style="max-height:28vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="colsReset">Reset</button>
+      <button class="btn btn-primary" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONTEXT MENUS -->
 <div id="ctxMenu" class="ctx-menu"></div>
+<div id="colHeaderCtx" class="ctx-menu"></div>
+
+<!-- DRAG PREVIEW -->
+<div id="dragPreview" class="drag-preview"></div>
 
 <script>
-// ===== Security gate: only run inside GC iframe OR as popout with token =====
+// ================================================================
+//  Security gate — only run inside GC iframe OR as popout with token
+// ================================================================
 (function gate() {
   const urlParams = new URLSearchParams(window.location.search);
   const mode = urlParams.get("mode");
   const hasPopoutToken = !!localStorage.getItem("gc_uvad_popout_token");
   const framed = window.self !== window.top;
-  // Allow: (1) framed inside any parent; (2) popout mode with handoff token; (3) GH Pages standalone for dev
-  if (framed || mode === "popout" || hasPopoutToken || location.hostname === "krb3qy.github.io" || location.hostname === "localhost") {
+  if (framed || mode === "popout" || hasPopoutToken ||
+      location.hostname === "krb3qy.github.io" || location.hostname === "localhost" ||
+      location.protocol === "file:") {
     document.getElementById("security-block").style.display = "none";
     document.getElementById("app-root").style.display = "flex";
   } else {
@@ -253,7 +665,7 @@
 })();
 
 // ================================================================
-//  CONFIG
+//  Config / storage
 // ================================================================
 const CONFIG = {
   clientId: "acd9ac35-984e-4f30-bb46-426160f498e0",
@@ -266,25 +678,35 @@ const STORAGE = {
   tokenExpiresAt: "gc_uvad_token_expires_at",
   pkceVerifier: "gc_uvad_pkce_verifier",
   oauthState: "gc_uvad_oauth_state",
-  settings: "gc_uvad_settings"
+  settings: "gc_uvad_settings",
+  queues: "gc_uvad_queues",
+  colsMy: "gc_uvad_cols_my",
+  colsQueue: "gc_uvad_cols_queue",
+  sidebarCollapsed: "gc_uvad_sidebar_collapsed",
+  statsGroupState: "gc_uvad_stats_group_state"
 };
 
 const loginBase = () => `https://login.${CONFIG.environment}`;
-const apiBase  = () => `https://api.${CONFIG.environment}`;
+const apiBase   = () => `https://api.${CONFIG.environment}`;
 const redirectUri = () => window.location.origin + window.location.pathname;
 const el = (id) => document.getElementById(id);
+const escape = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 
 // ================================================================
-//  State
+//  Runtime state
 // ================================================================
-const conversations = new Map();   // convId → normalized call object
-const queuesById = new Map();      // queueId → {id,name}
-const usersById = new Map();       // userId → {id,name}
-let currentUserId = null;
-let selectedQueueIds = [];         // tabs, in order
-let activeTabQueueId = null;       // which tab is currently showing
+const conversations = new Map();   // convId → normalized row
+const queuesById = new Map();      // queueId → {id, name}
+const usersById = new Map();       // userId → {id, name, presence, routingStatus}
+const queueMembers = new Map();    // queueId → Set of userIds
+const queueStats = new Map();      // queueId → observation object
+const queueWrapupCodes = new Map(); // queueId → [wrapup codes]
+let currentUser = null;            // {id, name, stationId, ...}
+let selectedQueueIds = [];         // tabs in order
+let activeTabQueueId = null;
 let selectedCallId = null;
 let selectedCallScope = null;      // "my" | "queue"
+let selectedDirUserId = null;
 let settings = { extensionId: "" };
 let ws = null;
 let wsChannelId = null;
@@ -293,20 +715,59 @@ let subscribedTopics = new Set();
 let authRedirectInProgress = false;
 let bannerTimeout = null;
 let durationTickTimer = null;
+let clockTimer = null;
+let maxConfParties = null;
+let statsGroupState = { agents: true, waiting: true, handled: true, sla: true };
 
 // ================================================================
-//  Status / Banner
+//  Column definitions (shared + per-scope default lists)
+// ================================================================
+const COLUMNS = {
+  stateIcon:     { label: "", width: "24px", icon: true, render: r => rowStateIcon(r) },
+  recIcon:       { label: "Rec", width: "32px", icon: true, render: r => r.recording ? '<span title="Recording" class="ico-color" style="color:#c00">●</span>' : '' },
+  listenIcon:    { label: "Lstn", width: "32px", icon: true, render: r => r.monitored ? '<span title="Monitored" class="ico-color" style="color:#036">◉</span>' : '' },
+  state:         { label: "State", width: "140px", render: r => `<span class="state-text ${escape(r.stateKey)}">${escape(r.stateDisplay)}</span>` },
+  name:          { label: "Name", width: "160px", render: r => escape(r.name) },
+  number:        { label: "Number", width: "140px", render: r => escape(r.number) },
+  duration:      { label: "Duration", width: "80px", render: r => humanDuration(Date.now() - r.startTimeMs) },
+  queue:         { label: "Queue", width: "140px", render: r => escape(r.queueName) },
+  assigned:      { label: "User", width: "140px", render: r => escape(r.assignedUserName) },
+  station:       { label: "Station", width: "100px", render: r => escape(r.station) },
+  line:          { label: "Line", width: "90px", render: r => escape(r.line) },
+  interactionId: { label: "Interaction Id", width: "240px", render: r => escape(r.id) },
+  interactionType:{label: "Type", width: "70px", render: r => escape(r.type) },
+  details:       { label: "Details", width: "180px", render: r => escape(r.details) },
+  waitReason:    { label: "Wait Reason", width: "120px", render: r => escape(r.waitReason) },
+  accountCode:   { label: "Account", width: "100px", render: r => escape(r.accountCode) },
+  wrapup:        { label: "Wrapup", width: "120px", render: r => escape(r.wrapupCode) },
+  timeInStatus:  { label: "Time in Status", width: "110px", render: r => humanDuration(Date.now() - r.stateChangeMs) },
+  timeInQueue:   { label: "Time in Queue", width: "110px", render: r => humanDuration(Date.now() - r.queueEnterMs) },
+  subject:       { label: "Subject", width: "180px", render: r => escape(r.subject) }
+};
+
+const DEFAULT_MY_COLS = ["stateIcon", "recIcon", "state", "name", "number", "duration", "queue", "wrapup", "accountCode"];
+const DEFAULT_QUEUE_COLS = ["stateIcon", "recIcon", "listenIcon", "state", "name", "number", "duration", "queue", "assigned", "waitReason", "interactionId"];
+let myCols = [...DEFAULT_MY_COLS];
+let queueCols = [...DEFAULT_QUEUE_COLS];
+
+function rowStateIcon(r) {
+  const k = r.stateKey;
+  const color = k === "connected" ? "#060" : k === "alerting" ? "#c60" : k === "held" ? "#b35900" : "#888";
+  const glyph = k === "connected" ? "●" : k === "alerting" ? "♦" : k === "held" ? "⏸" : k === "offering" ? "▶" : "○";
+  return `<span class="ico-color" style="color:${color}">${glyph}</span>`;
+}
+
+// ================================================================
+//  Status / banner helpers
 // ================================================================
 function setStatus(text, kind = "") {
+  el("statusText").textContent = text;
   const dot = el("statusDot");
-  const txt = el("statusText");
-  if (txt) txt.textContent = text;
-  if (dot) {
-    dot.classList.remove("connected","warn","err");
-    if (kind === "ok") dot.classList.add("connected");
-    else if (kind === "warn") dot.classList.add("warn");
-    else if (kind === "err") dot.classList.add("err");
-  }
+  dot.classList.remove("connected", "warn", "err");
+  if (kind === "ok") dot.classList.add("connected");
+  else if (kind === "warn") dot.classList.add("warn");
+  else if (kind === "err") dot.classList.add("err");
+  el("sbConnected").textContent = text;
 }
 
 function showBanner({ type = "info", title = "", message = "", autoHideMs = 0 } = {}) {
@@ -316,41 +777,33 @@ function showBanner({ type = "info", title = "", message = "", autoHideMs = 0 } 
   host.innerHTML = `
     <div class="banner ${type}">
       <div class="banner-content">
-        <div class="banner-title">${title}</div>
-        ${message ? `<div class="banner-msg">${message}</div>` : ""}
+        <div class="banner-title">${escape(title)}</div>
+        ${message ? `<div class="banner-msg">${escape(message)}</div>` : ""}
       </div>
-      <div class="banner-actions">
-        <button id="bannerDismiss" class="btn btn-ghost btn-sm">Dismiss</button>
-      </div>
+      <div class="banner-actions"><button id="bannerDismiss">Dismiss</button></div>
     </div>`;
-  const dBtn = document.getElementById("bannerDismiss");
-  if (dBtn) dBtn.addEventListener("click", () => { host.classList.add("hidden"); host.innerHTML = ""; });
+  el("bannerDismiss").addEventListener("click", () => { host.classList.add("hidden"); host.innerHTML = ""; });
   if (autoHideMs > 0) bannerTimeout = setTimeout(() => { host.classList.add("hidden"); host.innerHTML = ""; }, autoHideMs);
 }
 
 // ================================================================
-//  PKCE / OAuth
+//  PKCE / OAuth  (unchanged from working version)
 // ================================================================
 function base64UrlEncode(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
+  const bytes = new Uint8Array(buffer); let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
 }
 function randomString(length = 64) {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
+  const bytes = new Uint8Array(length); crypto.getRandomValues(bytes);
   return base64UrlEncode(bytes.buffer);
 }
-async function sha256(input) {
-  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-}
+async function sha256(input) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)); }
 async function createPkceChallenge(v) { return base64UrlEncode(await sha256(v)); }
 
 function saveToken(tj) {
-  const expiresAt = Date.now() + (Number(tj.expires_in || 0) * 1000);
   sessionStorage.setItem(STORAGE.token, tj.access_token);
-  sessionStorage.setItem(STORAGE.tokenExpiresAt, String(expiresAt));
+  sessionStorage.setItem(STORAGE.tokenExpiresAt, String(Date.now() + (Number(tj.expires_in || 0) * 1000)));
 }
 function clearAuth() {
   sessionStorage.removeItem(STORAGE.token);
@@ -366,7 +819,12 @@ function getToken() {
   return tok;
 }
 
-function buildAuthorizeUrl(challenge, state) {
+async function startLogin() {
+  const verifier = randomString(64);
+  const challenge = await createPkceChallenge(verifier);
+  const state = randomString(24);
+  sessionStorage.setItem(STORAGE.pkceVerifier, verifier);
+  sessionStorage.setItem(STORAGE.oauthState, state);
   const u = new URL(`${loginBase()}/oauth/authorize`);
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CONFIG.clientId);
@@ -375,16 +833,7 @@ function buildAuthorizeUrl(challenge, state) {
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("state", state);
   if (CONFIG.scope) u.searchParams.set("scope", CONFIG.scope);
-  return u.toString();
-}
-
-async function startLogin() {
-  const verifier = randomString(64);
-  const challenge = await createPkceChallenge(verifier);
-  const state = randomString(24);
-  sessionStorage.setItem(STORAGE.pkceVerifier, verifier);
-  sessionStorage.setItem(STORAGE.oauthState, state);
-  window.location.assign(buildAuthorizeUrl(challenge, state));
+  window.location.assign(u.toString());
 }
 
 async function exchangeCodeForToken(code) {
@@ -401,9 +850,7 @@ async function exchangeCodeForToken(code) {
   body.set("redirect_uri", redirectUri());
   body.set("code_verifier", verifier);
   const resp = await fetch(`${loginBase()}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body
   });
   if (!resp.ok) throw new Error(`Token exchange failed: ${resp.status} ${await resp.text()}`);
   saveToken(await resp.json());
@@ -416,7 +863,7 @@ async function exchangeCodeForToken(code) {
 async function redirectToGenesysLogin(reason = "") {
   if (authRedirectInProgress) return;
   authRedirectInProgress = true;
-  setStatus("Re-authenticating…","warn");
+  setStatus("Re-authenticating…", "warn");
   showBanner({ type: "info", title: "Session expired", message: reason || "Redirecting to Genesys sign-in…" });
   clearAuth();
   setTimeout(startLogin, 450);
@@ -424,10 +871,7 @@ async function redirectToGenesysLogin(reason = "") {
 
 async function apiFetch(path, { method = "GET", body = null } = {}) {
   const token = getToken();
-  if (!token) {
-    await redirectToGenesysLogin("Your session ended.");
-    throw new Error("AUTH_REDIRECT");
-  }
+  if (!token) { await redirectToGenesysLogin("Your session ended."); throw new Error("AUTH_REDIRECT"); }
   const resp = await fetch(`${apiBase()}${path}`, {
     method,
     headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
@@ -441,7 +885,7 @@ async function apiFetch(path, { method = "GET", body = null } = {}) {
 }
 
 // ================================================================
-//  Notification WebSocket
+//  WebSocket notification channel
 // ================================================================
 async function ensureChannel() {
   if (wsChannelId && ws && ws.readyState === WebSocket.OPEN) return;
@@ -450,97 +894,144 @@ async function ensureChannel() {
   wsChannelUri = ch.connectUri;
   await new Promise((resolve, reject) => {
     ws = new WebSocket(wsChannelUri);
-    ws.onopen = () => { setStatus("Live","ok"); resolve(); };
-    ws.onerror = (e) => { setStatus("WebSocket error","err"); reject(e); };
-    ws.onclose = () => { setStatus("WS closed","warn"); ws = null; wsChannelId = null; };
+    ws.onopen = () => { setStatus("Live", "ok"); resolve(); };
+    ws.onerror = (e) => { setStatus("WebSocket error", "err"); reject(e); };
+    ws.onclose = () => { setStatus("WS closed", "warn"); ws = null; wsChannelId = null; };
     ws.onmessage = (ev) => {
       try { handleNotification(JSON.parse(ev.data)); } catch (err) { console.error("notif parse", err); }
     };
   });
 }
 
-async function setSubscriptions(topics) {
-  if (!wsChannelId) await ensureChannel();
-  const body = topics.map(t => ({ id: t }));
-  await apiFetch(`/api/v2/notifications/channels/${wsChannelId}/subscriptions`, { method: "PUT", body });
-  subscribedTopics = new Set(topics);
-}
-
 function computeTopics() {
   const topics = [];
-  if (currentUserId) {
-    topics.push(`v2.users.${currentUserId}.conversations.calls`);
-    topics.push(`v2.users.${currentUserId}.presence`);
-    topics.push(`v2.users.${currentUserId}.routingStatus`);
+  if (currentUser?.id) {
+    topics.push(`v2.users.${currentUser.id}.conversations.calls`);
+    topics.push(`v2.users.${currentUser.id}.presence`);
+    topics.push(`v2.users.${currentUser.id}.routingStatus`);
   }
   for (const qid of selectedQueueIds) {
     topics.push(`v2.routing.queues.${qid}.conversations.calls`);
+    topics.push(`v2.analytics.queues.${qid}.observations`);
   }
-  return topics;
+  if (activeTabQueueId && queueMembers.has(activeTabQueueId)) {
+    for (const uid of queueMembers.get(activeTabQueueId)) {
+      if (uid === currentUser?.id) continue;
+      topics.push(`v2.users.${uid}.presence`);
+      topics.push(`v2.users.${uid}.routingStatus`);
+    }
+  }
+  return [...new Set(topics)];
 }
 
 async function refreshSubscriptions() {
   const topics = computeTopics();
   if (topics.length === 0) return;
-  await setSubscriptions(topics);
+  if (!wsChannelId) await ensureChannel();
+  await apiFetch(`/api/v2/notifications/channels/${wsChannelId}/subscriptions`, {
+    method: "PUT",
+    body: topics.map(t => ({ id: t }))
+  });
+  subscribedTopics = new Set(topics);
 }
 
-// ================================================================
-//  Notification handling
-// ================================================================
 function handleNotification(msg) {
   if (msg?.topicName === "channel.metadata") return;
   const topic = msg.topicName || "";
+  const body = msg.eventBody;
   if (topic.includes(".conversations.calls")) {
-    const c = msg.eventBody;
-    if (c && c.id) {
-      ingestConversation(c);
-      renderAll();
-    }
-  } else if (topic.endsWith(".presence") || topic.endsWith(".routingStatus")) {
-    // later: reflect presence of current user / tracked agents
+    if (body && body.id) { ingestConversation(body); renderAll(); }
+  } else if (topic.endsWith(".observations")) {
+    const qid = topic.split(".")[3];
+    if (qid && body) { queueStats.set(qid, body); if (qid === activeTabQueueId) renderStats(); }
+  } else if (topic.endsWith(".presence")) {
+    const uid = topic.split(".")[2];
+    const u = usersById.get(uid) || { id: uid };
+    u.presence = mapPresence(body?.presenceDefinition?.systemPresence || body?.source || "");
+    usersById.set(uid, u);
+    if (uid === currentUser?.id) renderMyPresence();
+    renderDirectory();
+  } else if (topic.endsWith(".routingStatus")) {
+    const uid = topic.split(".")[2];
+    const u = usersById.get(uid) || { id: uid };
+    u.routingStatus = body?.status || body?.routingStatus?.status || "";
+    usersById.set(uid, u);
+    if (uid === currentUser?.id) renderMyPresence();
+    renderDirectory();
   }
 }
 
-// Turn a GC conversation payload into a dashboard row
+function mapPresence(sys) {
+  const s = (sys || "").toLowerCase();
+  if (s.includes("available")) return "available";
+  if (s.includes("busy") || s.includes("onqueue")) return "busy";
+  if (s.includes("away") || s.includes("break")) return "away";
+  if (s.includes("meeting")) return "meeting";
+  if (!s || s.includes("offline")) return "offline";
+  return "offline";
+}
+
+// ================================================================
+//  Conversation normalization
+// ================================================================
 function ingestConversation(c) {
   const parts = c.participants || [];
   const customer = parts.find(p => p.purpose === "customer" || p.purpose === "external") || {};
   const agent = [...parts].reverse().find(p => p.purpose === "agent") || null;
   const acd = parts.find(p => p.purpose === "acd") || null;
+  const monitor = parts.find(p => p.purpose === "monitor");
   const calls = (agent?.calls || customer?.calls || parts.flatMap(p => p.calls || []));
   const primaryCall = calls.find(cc => cc.state && cc.state !== "disconnected") || calls[0] || {};
   const queueId = acd?.queueId || agent?.queueId || null;
+
+  const held = !!primaryCall.held;
+  let stateKey = (primaryCall.state || agent?.state || "connected").toLowerCase();
+  if (held) stateKey = "held";
+  let stateDisplay = stateKey.charAt(0).toUpperCase() + stateKey.slice(1);
+  if (stateKey === "alerting" && agent) stateDisplay = `ACD – Alerting: ${agent.name || (usersById.get(agent.userId)?.name || "")}`;
+  else if (stateKey === "connected" && agent) stateDisplay = `ACD – Assigned: ${agent.name || (usersById.get(agent.userId)?.name || "")}`;
+  else if (stateKey === "offering") stateDisplay = `ACD – Wait Agent`;
+
+  const startTime = primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime ||
+                    agent?.connectedTime || c.dateModified || c.dateStart || Date.now();
+  const startTimeMs = new Date(startTime).getTime();
+  const queueEnterMs = acd?.startTime ? new Date(acd.startTime).getTime() : startTimeMs;
+  const stateChangeMs = startTimeMs;
+
   const row = {
     id: c.id,
     name: customer.name || agent?.name || "",
     number: customer.address || primaryCall.other || primaryCall.self || "",
     queueId,
     queueName: queueId ? (queuesById.get(queueId)?.name || queueId) : "",
-    state: primaryCall.state || agent?.state || "connected",
-    held: !!primaryCall.held,
+    stateKey, stateDisplay,
+    held,
     assignedUserId: agent?.userId || null,
     assignedUserName: agent?.userId ? (usersById.get(agent.userId)?.name || agent.name || "") : "",
-    startTime: primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime || agent?.connectedTime || c.dateModified || c.dateStart || Date.now(),
-    hasMe: parts.some(p => p.userId === currentUserId && !p.endTime),
+    startTimeMs, queueEnterMs, stateChangeMs,
+    hasMe: parts.some(p => p.userId === currentUser?.id && !p.endTime),
     disconnected: parts.every(p => p.state === "disconnected" || p.endTime),
+    recording: c.recordingState && c.recordingState !== "none",
+    monitored: !!monitor || !!customer.monitoredParticipantId,
+    station: agent?.attributes?.stationId || "",
+    line: primaryCall.edgeGroupId || "",
+    type: primaryCall.provider || "voice",
+    details: [customer.name, customer.address].filter(Boolean).join(" · "),
+    waitReason: acd?.flaggedReason || primaryCall.flaggedReason || "",
+    accountCode: c.externalTag || agent?.attributes?.accountCode || "",
+    wrapupCode: agent?.wrapup?.code || "",
+    subject: c.description || "",
     raw: c
   };
-  // Mirror held flag into a derived state
-  if (row.held) row.state = "held";
-  if (row.disconnected) {
-    conversations.delete(row.id);
-  } else {
-    conversations.set(row.id, row);
-  }
-  // Resolve queue name asynchronously if we don't know it
-  if (queueId && !queuesById.has(queueId)) resolveQueue(queueId).then(renderAll).catch(()=>{});
-  // Resolve user name
-  if (row.assignedUserId && !usersById.has(row.assignedUserId)) resolveUser(row.assignedUserId).then(renderAll).catch(()=>{});
+  if (row.disconnected) conversations.delete(row.id);
+  else conversations.set(row.id, row);
+
+  if (queueId && !queuesById.has(queueId)) resolveQueue(queueId).then(renderAll).catch(() => {});
+  if (row.assignedUserId && !usersById.has(row.assignedUserId)) resolveUser(row.assignedUserId).then(renderAll).catch(() => {});
 }
 
 // ================================================================
-//  Resolvers + initial loads
+//  Resolvers / initial loads
 // ================================================================
 async function resolveQueue(id) {
   const q = await apiFetch(`/api/v2/routing/queues/${id}`);
@@ -548,37 +1039,74 @@ async function resolveQueue(id) {
   return q;
 }
 async function resolveUser(id) {
-  const u = await apiFetch(`/api/v2/users/${id}`);
-  usersById.set(id, { id, name: u.name });
+  const u = await apiFetch(`/api/v2/users/${id}?expand=presence,routingStatus`);
+  const existing = usersById.get(id) || {};
+  usersById.set(id, {
+    ...existing, id, name: u.name,
+    presence: mapPresence(u.presence?.presenceDefinition?.systemPresence || ""),
+    routingStatus: u.routingStatus?.status || existing.routingStatus || ""
+  });
   return u;
 }
 async function fetchCurrentUser() {
-  const me = await apiFetch("/api/v2/users/me");
-  currentUserId = me.id;
-  usersById.set(me.id, { id: me.id, name: me.name });
+  const me = await apiFetch("/api/v2/users/me?expand=presence,routingStatus,station");
+  currentUser = {
+    id: me.id, name: me.name,
+    station: me.station?.associatedStation?.name || me.station?.effectiveStation?.name || ""
+  };
+  usersById.set(me.id, {
+    id: me.id, name: me.name,
+    presence: mapPresence(me.presence?.presenceDefinition?.systemPresence || ""),
+    routingStatus: me.routingStatus?.status || ""
+  });
 }
 async function fetchAllQueues() {
-  const out = [];
   let page = 1;
   while (true) {
     const r = await apiFetch(`/api/v2/routing/queues?pageSize=100&pageNumber=${page}`);
-    for (const q of r.entities || []) { out.push(q); queuesById.set(q.id, { id: q.id, name: q.name }); }
+    for (const q of r.entities || []) queuesById.set(q.id, { id: q.id, name: q.name });
     if (!r.entities || r.entities.length < 100) break;
-    page++;
-    if (page > 20) break;
+    page++; if (page > 20) break;
   }
-  return out;
 }
 async function seedMyInteractions() {
-  // Pull current interactions once so the panel isn't empty before events fire
   try {
     const r = await apiFetch("/api/v2/conversations");
     for (const c of r.entities || []) ingestConversation(c);
   } catch (e) { console.warn("seedMyInteractions failed", e); }
 }
+async function fetchQueueMembers(queueId) {
+  try {
+    const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&expand=presence,routingStatus`);
+    const ids = new Set();
+    for (const m of r.entities || []) {
+      ids.add(m.id);
+      usersById.set(m.id, {
+        id: m.id, name: m.name,
+        presence: mapPresence(m.presence?.presenceDefinition?.systemPresence || ""),
+        routingStatus: m.routingStatus?.status || ""
+      });
+    }
+    queueMembers.set(queueId, ids);
+  } catch (e) { console.warn("queue members", e); }
+}
+async function fetchQueueWrapupCodes(queueId) {
+  try {
+    const r = await apiFetch(`/api/v2/routing/queues/${queueId}/wrapupcodes?pageSize=100`);
+    queueWrapupCodes.set(queueId, (r.entities || []).map(w => ({ id: w.id, name: w.name })));
+  } catch (e) { console.warn("wrapup codes", e); }
+}
+async function ensureMaxConf() {
+  if (maxConfParties !== null) return maxConfParties;
+  try {
+    const r = await apiFetch("/api/v2/conversations/calls/maximumconferenceparties");
+    maxConfParties = r.maxParticipants || r.max || 8;
+  } catch { maxConfParties = 8; }
+  return maxConfParties;
+}
 
 // ================================================================
-//  Rendering
+//  Rendering — tables
 // ================================================================
 function humanDuration(ms) {
   if (!ms || ms < 0) return "";
@@ -590,122 +1118,255 @@ function humanDuration(ms) {
                : `${m}:${String(sec).padStart(2,"0")}`;
 }
 
-function statePill(s) {
-  const k = (s || "").toLowerCase();
-  return `<span class="state-pill ${k}">${s || ""}</span>`;
-}
-
-function isMyCall(row) { return row.hasMe; }
-function isQueueCall(row, queueId) {
-  if (!queueId) return false;
-  return row.queueId === queueId;
-}
-
-function renderMy() {
-  const body = el("myBody");
-  const empty = el("myEmpty");
-  const rows = [...conversations.values()].filter(isMyCall);
-  el("myCount").textContent = rows.length;
-  if (rows.length === 0) { body.innerHTML = ""; empty.style.display = "block"; return; }
-  empty.style.display = "none";
-  body.innerHTML = rows.map(r => renderRow(r, "my")).join("");
-}
-
-function renderQueue() {
-  const body = el("queueBody");
-  const empty = el("queueEmpty");
-  if (!activeTabQueueId) { body.innerHTML = ""; empty.textContent = "No queue selected — click + Queue"; empty.style.display = "block"; return; }
-  const rows = [...conversations.values()].filter(r => isQueueCall(r, activeTabQueueId));
-  if (rows.length === 0) { body.innerHTML = ""; empty.textContent = `No calls in ${queuesById.get(activeTabQueueId)?.name || activeTabQueueId}`; empty.style.display = "block"; return; }
-  empty.style.display = "none";
-  body.innerHTML = rows.map(r => renderRow(r, "queue")).join("");
-}
-
-function renderRow(r, scope) {
-  const sel = (selectedCallId === r.id && selectedCallScope === scope) ? " selected" : "";
-  const dur = humanDuration(Date.now() - new Date(r.startTime).getTime());
-  const assigned = r.assignedUserName || "";
-  if (scope === "my") {
-    return `<tr class="row${sel}" data-id="${r.id}" data-scope="my">
-      <td>${escape(r.name)}</td>
-      <td>${escape(r.number)}</td>
-      <td>${escape(r.queueName)}</td>
-      <td>${statePill(r.state)}</td>
-      <td>${dur}</td>
-    </tr>`;
-  }
-  return `<tr class="row${sel}" data-id="${r.id}" data-scope="queue">
-    <td>${escape(r.name)}</td>
-    <td>${escape(r.number)}</td>
-    <td>${escape(r.queueName)}</td>
-    <td>${statePill(r.state)}</td>
-    <td>${escape(assigned)}</td>
-    <td>${dur}</td>
-  </tr>`;
-}
-
-function escape(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
-
-function renderTabs() {
-  const bar = el("tabBar");
-  bar.innerHTML = selectedQueueIds.map(qid => {
-    const qn = queuesById.get(qid)?.name || qid;
-    const count = [...conversations.values()].filter(r => r.queueId === qid).length;
-    const active = activeTabQueueId === qid ? " active" : "";
-    return `<div class="tab${active}" data-qid="${qid}">
-      <span>${escape(qn)}</span>
-      <span class="count">${count}</span>
-      <span class="close" data-close="${qid}">✕</span>
-    </div>`;
+function renderHeaders() {
+  el("myHead").innerHTML = myCols.map(k => {
+    const c = COLUMNS[k]; if (!c) return "";
+    return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="my">${escape(c.label)}</th>`;
+  }).join("");
+  el("queueHead").innerHTML = queueCols.map(k => {
+    const c = COLUMNS[k]; if (!c) return "";
+    return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="queue">${escape(c.label)}</th>`;
   }).join("");
 }
 
-function renderActions() {
-  const selRow = selectedCallId ? conversations.get(selectedCallId) : null;
-  const renderBar = (host, row, scope) => {
-    const h = el(host);
-    if (!row || (scope === "my" && selectedCallScope !== "my") || (scope === "queue" && selectedCallScope !== "queue")) {
-      h.innerHTML = `<span style="color:var(--muted);font-size:11px">${scope === "my" ? "Select an interaction for actions" : "Select a queue call for actions"}</span>`;
-      return;
-    }
-    const isHeld = row.state === "held" || row.held;
-    const isMine = row.hasMe;
-    const buttons = [];
-    if (scope === "my" && isMine) {
-      buttons.push(`<button class="btn btn-sm" data-act="answer">Answer</button>`);
-      buttons.push(`<button class="btn btn-sm" data-act="${isHeld ? 'unhold' : 'hold'}">${isHeld ? 'Unhold' : 'Hold'}</button>`);
-      buttons.push(`<button class="btn btn-sm" data-act="mute">Mute</button>`);
-      buttons.push(`<button class="btn btn-sm" data-act="transfer">Transfer</button>`);
-      buttons.push(`<span class="sep"></span>`);
-      buttons.push(`<button class="btn btn-sm btn-danger" data-act="disconnect">Disconnect</button>`);
-    }
-    if (scope === "queue") {
-      buttons.push(`<button class="btn btn-sm" data-act="pickup">Pick Up</button>`);
-      buttons.push(`<span class="sep"></span>`);
-      buttons.push(`<button class="btn btn-sm" data-act="listen">Listen</button>`);
-      buttons.push(`<button class="btn btn-sm" data-act="coach">Coach</button>`);
-      buttons.push(`<button class="btn btn-sm" data-act="barge">Join</button>`);
-    }
-    h.innerHTML = buttons.join("");
-    h.querySelectorAll("button").forEach(b => b.addEventListener("click", () => doAction(b.dataset.act, row)));
-  };
-  renderBar("myActions", selRow, "my");
-  renderBar("queueActions", selRow, "queue");
+function renderRow(r, scope) {
+  const cols = scope === "my" ? myCols : queueCols;
+  const sel = (selectedCallId === r.id && selectedCallScope === scope) ? " selected" : "";
+  const cells = cols.map(k => {
+    const c = COLUMNS[k]; if (!c) return "";
+    return `<td class="${c.icon ? 'icon-col' : ''}">${c.render(r)}</td>`;
+  }).join("");
+  return `<tr class="row${sel}" data-id="${escape(r.id)}" data-scope="${scope}" draggable="true">${cells}</tr>`;
 }
 
+function renderMy() {
+  const rows = [...conversations.values()].filter(r => r.hasMe);
+  el("myCount").textContent = rows.length;
+  el("myBody").innerHTML = rows.map(r => renderRow(r, "my")).join("");
+  el("myEmpty").style.display = rows.length === 0 ? "block" : "none";
+}
+
+function renderQueue() {
+  const empty = el("queueEmpty");
+  if (!activeTabQueueId) {
+    el("queueBody").innerHTML = "";
+    empty.textContent = "No queue selected — click + Queue";
+    empty.style.display = "block"; return;
+  }
+  const rows = [...conversations.values()].filter(r => r.queueId === activeTabQueueId);
+  el("queueBody").innerHTML = rows.map(r => renderRow(r, "queue")).join("");
+  if (rows.length === 0) {
+    empty.textContent = `No calls in ${queuesById.get(activeTabQueueId)?.name || activeTabQueueId}`;
+    empty.style.display = "block";
+  } else {
+    empty.style.display = "none";
+  }
+}
+
+function renderTabs() {
+  const bar = el("tabBar");
+  const tabs = selectedQueueIds.map(qid => {
+    const qn = queuesById.get(qid)?.name || qid;
+    const count = [...conversations.values()].filter(r => r.queueId === qid).length;
+    const active = activeTabQueueId === qid ? " active" : "";
+    return `<div class="tab${active}" data-qid="${escape(qid)}">
+      <span>${escape(qn)}</span>
+      <span class="count">${count}</span>
+      <span class="close" data-close-qid="${escape(qid)}">✕</span>
+    </div>`;
+  }).join("");
+  bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn">+ Queue</button>`;
+  el("addTabBtn").addEventListener("click", openSettings);
+}
+
+function renderToolbar() {
+  const selRow = selectedCallId ? conversations.get(selectedCallId) : null;
+  const isMine = selRow?.hasMe;
+  const isQueue = selectedCallScope === "queue";
+  const isHeld = selRow?.stateKey === "held";
+
+  const enable = (act, ok) => {
+    const b = document.querySelector(`.tbtn[data-act="${act}"]`);
+    if (!b) return;
+    b.disabled = !ok;
+    if (act === "hold") { b.classList.toggle("active", isHeld); b.firstChild.nextSibling ? (b.lastChild.textContent = isHeld ? " Unhold" : " Hold") : null; }
+    if (act === "record") { b.classList.toggle("active", !!selRow?.recording); }
+  };
+  enable("makeCall", true);
+  enable("pickup", !!selRow && isQueue && !isMine);
+  enable("hold", !!selRow && isMine);
+  enable("mute", !!selRow && isMine);
+  enable("private", !!selRow && isMine);
+  enable("transfer", !!selRow && (isMine || isQueue));
+  enable("consult", !!selRow && isMine);
+  enable("voicemail", !!selRow && (isMine || isQueue));
+  enable("disconnect", !!selRow && isMine);
+  enable("barge", !!selRow && isQueue);
+  enable("listen", !!selRow && isQueue);
+  enable("coach", !!selRow && isQueue);
+  enable("record", !!selRow && (isMine || isQueue));
+  enable("pause", !!selRow && (isMine || isQueue));
+  enable("wrapup", !!selRow && isMine);
+  enable("settings", true);
+  enable("popout", true);
+
+  // Toolbar Hold label swap
+  const holdBtn = document.querySelector('.tbtn[data-act="hold"]');
+  if (holdBtn) {
+    const icon = holdBtn.querySelector("svg");
+    holdBtn.innerHTML = "";
+    holdBtn.appendChild(icon);
+    holdBtn.appendChild(document.createTextNode(isHeld ? " Unhold" : " Hold"));
+  }
+}
+
+// ================================================================
+//  Stats sidebar
+// ================================================================
+function renderStats() {
+  const qid = activeTabQueueId;
+  el("statsQueueName").textContent = qid ? (queuesById.get(qid)?.name || qid) : "—";
+  const body = el("statsBody");
+  if (!qid) { body.innerHTML = '<div class="empty-msg">Select a queue tab to see stats</div>'; return; }
+  const s = queueStats.get(qid) || {};
+  const get = k => (typeof s[k] === "number" ? s[k] : (s.metrics?.find(m => m.metric === k)?.stats?.count ?? ""));
+
+  // Observation payload shape varies; also support metrics[].
+  const metricValue = (mkey) => {
+    if (typeof s[mkey] === "number") return s[mkey];
+    if (Array.isArray(s.metrics)) {
+      const m = s.metrics.find(x => x.metric === mkey);
+      if (m) return m.stats?.count ?? m.stats?.sum ?? m.value ?? "—";
+    }
+    if (s.data) {
+      const m = s.data.find?.(x => x.metric === mkey);
+      if (m) return m.stats?.count ?? m.value ?? "—";
+    }
+    return "—";
+  };
+
+  const groups = [
+    { key: "agents", title: "Agents", items: [
+      ["Logged On",   "oOnQueueUsers"],
+      ["Available",   "oIdleUsers"],
+      ["Interacting", "oInteractingUsers"],
+      ["Not Responding", "oNotRespondingUsers"],
+      ["Off Queue",   "oOffQueueUsers"]
+    ]},
+    { key: "waiting", title: "Waiting", items: [
+      ["Interactions Waiting", "oWaiting"],
+      ["Interactions Alerting","oAlerting"],
+      ["Interactions Holding", "oOnHold"],
+      ["Longest Wait (s)",     "oLongestWaiting"]
+    ]},
+    { key: "handled", title: "Handled (period)", items: [
+      ["Offered",     "nOffered"],
+      ["Answered",    "nAnswered"],
+      ["Abandoned",   "nAbandon"],
+      ["Transferred", "nTransferred"]
+    ]},
+    { key: "sla", title: "SLA", items: [
+      ["Service Level %", "oServiceLevel"],
+      ["Avg Wait (s)",    "oAverageWait"],
+      ["Avg Handle (s)",  "oAverageHandle"]
+    ]}
+  ];
+
+  body.innerHTML = groups.map(g => `
+    <div class="stats-group ${statsGroupState[g.key] === false ? 'collapsed' : ''}" data-group="${g.key}">
+      <div class="stats-group-title" data-toggle="${g.key}">
+        <span class="expander">${statsGroupState[g.key] === false ? '▶' : '▼'}</span>
+        <span>${escape(g.title)}</span>
+      </div>
+      <div class="stats-items">
+        ${g.items.map(([label, mkey]) => `
+          <div class="stats-row"><span class="label">${escape(label)}</span><span class="value">${escape(String(metricValue(mkey)))}</span></div>
+        `).join("")}
+      </div>
+    </div>
+  `).join("");
+
+  body.querySelectorAll("[data-toggle]").forEach(x => x.addEventListener("click", () => {
+    const k = x.dataset.toggle;
+    statsGroupState[k] = !statsGroupState[k];
+    try { localStorage.setItem(STORAGE.statsGroupState, JSON.stringify(statsGroupState)); } catch {}
+    renderStats();
+  }));
+}
+
+// ================================================================
+//  Directory panel
+// ================================================================
+function renderDirectory() {
+  const body = el("dirBody");
+  const qid = activeTabQueueId;
+  if (!qid) { body.innerHTML = '<div class="empty-msg">Select a queue to load members</div>'; el("dirCount").textContent = "0"; return; }
+  const ids = queueMembers.get(qid);
+  if (!ids) { body.innerHTML = '<div class="empty-msg">Loading members…</div>'; el("dirCount").textContent = "0"; return; }
+
+  const members = [...ids].map(id => usersById.get(id) || { id, name: id })
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  el("dirCount").textContent = members.length;
+
+  body.innerHTML = members.map(m => {
+    const p = m.presence || "offline";
+    const r = m.routingStatus ? ` · ${m.routingStatus}` : "";
+    const sel = selectedDirUserId === m.id ? " selected" : "";
+    return `<div class="dir-row${sel}" data-uid="${escape(m.id)}">
+      <span class="p-dot ${p}" title="${escape(p)}"></span>
+      <span class="name">${escape(m.name || m.id)}</span>
+      <span class="rstatus">${escape(r)}</span>
+    </div>`;
+  }).join("");
+
+  body.querySelectorAll(".dir-row").forEach(r => r.addEventListener("click", () => {
+    selectedDirUserId = r.dataset.uid;
+    renderDirectory();
+  }));
+}
+
+// ================================================================
+//  Status bar (self presence / routing / station / env / clock)
+// ================================================================
+function renderMyPresence() {
+  if (!currentUser) return;
+  const u = usersById.get(currentUser.id) || {};
+  el("sbUser").textContent = currentUser.name || "—";
+  const p = u.presence || "offline";
+  el("sbPresenceDot").className = `p-dot ${p}`;
+  el("sbPresence").textContent = p.charAt(0).toUpperCase() + p.slice(1);
+  el("sbRouting").textContent = "Routing: " + (u.routingStatus || "—");
+  el("sbStation").textContent = "Station: " + (currentUser.station || "—");
+  el("sbEnv").textContent = CONFIG.environment;
+}
+
+function startClock() {
+  if (clockTimer) return;
+  const tick = () => {
+    const d = new Date();
+    el("sbClock").textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
+  tick();
+  clockTimer = setInterval(tick, 1000);
+}
+
+// ================================================================
+//  Master render
+// ================================================================
 function renderAll() {
+  renderHeaders();
   renderTabs();
   renderMy();
   renderQueue();
-  renderActions();
+  renderToolbar();
+  renderStats();
+  renderDirectory();
+  renderMyPresence();
 }
 
-// ================================================================
-//  Duration tick
-// ================================================================
 function startDurationTick() {
   if (durationTickTimer) return;
-  durationTickTimer = setInterval(renderAll, 1000);
+  durationTickTimer = setInterval(() => { renderMy(); renderQueue(); }, 1000);
 }
 
 // ================================================================
@@ -713,115 +1374,206 @@ function startDurationTick() {
 // ================================================================
 async function doAction(act, row) {
   try {
+    if (act === "makeCall") { openOutboundModal(); return; }
+    if (act === "settings") { openSettings(); return; }
+    if (act === "popout") { /* handled elsewhere */ return; }
+    if (act === "wrapup") { openWrapupModal(row); return; }
+    if (act === "transfer") { openTransferModal(row); return; }
+    if (act === "consult") { openConsultModal(row); return; }
+    if (act === "voicemail") { await actVoicemail(row); return; }
+    if (!row) return;
     const convId = row.id;
-    const myPart = (row.raw.participants || []).find(p => p.userId === currentUserId && !p.endTime);
+    const myPart = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime);
     const myPartId = myPart?.id;
+    const agentPart = (row.raw.participants || []).slice().reverse().find(p => p.purpose === "agent" && !p.endTime);
+
     switch (act) {
-      case "answer": {
+      case "answer":
         if (!myPartId) throw new Error("No participant to answer on");
         await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "connected" } });
-        // WebRTC fallback via extension bridge (no-op if user isn't WebRTC)
         sendToExtension({ action: "answerCall", convId });
         break;
-      }
       case "hold":
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: true } });
-        break;
-      case "unhold":
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: false } });
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: !row.held } });
         break;
       case "mute":
         await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { muted: true } });
         break;
+      case "private":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/recordingstate`, { method: "PATCH", body: { state: row.recording ? "paused" : "none", secured: true } });
+        break;
       case "disconnect":
         await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
         break;
-      case "transfer": openTransferModal(convId, myPartId); break;
       case "pickup": {
-        // "Pickup" from queue = replace alerting/acd leg, routing to me
-        // Path: POST /conversations/calls/{id}/participants/{participantId}/replace with {userId: me}
         const target = (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
         if (!target) throw new Error("No pickup-eligible participant");
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, { method: "POST", body: { userId: currentUserId, voicemail: false } });
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, { method: "POST", body: { userId: currentUser.id, voicemail: false } });
         sendToExtension({ action: "answerCall", convId });
         break;
       }
-      case "listen": {
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${findAgentPartId(row)}/monitor`, { method: "POST", body: {} });
+      case "listen":
+        if (!agentPart) throw new Error("No agent to monitor");
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${agentPart.id}/monitor`, { method: "POST", body: {} });
         break;
-      }
-      case "coach": {
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${findAgentPartId(row)}/coach`, { method: "POST", body: {} });
+      case "coach":
+        if (!agentPart) throw new Error("No agent to coach");
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${agentPart.id}/coach`, { method: "POST", body: {} });
         break;
-      }
-      case "barge": {
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${findAgentPartId(row)}/barge`, { method: "POST", body: {} });
+      case "barge":
+        if (!agentPart) throw new Error("No agent to barge");
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${agentPart.id}/barge`, { method: "POST", body: {} });
+        break;
+      case "record":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/recordingstate`, { method: "PATCH", body: { state: row.recording ? "none" : "active" } });
+        break;
+      case "pause":
+        await apiFetch(`/api/v2/conversations/calls/${convId}/recordingstate`, { method: "PATCH", body: { state: "paused", secured: true } });
+        break;
+      case "steal": {
+        const target = (row.raw.participants || []).slice().reverse().find(p => p.purpose === "agent" && p.state === "alerting" && !p.endTime);
+        if (!target) throw new Error("No alerting participant to steal");
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, { method: "POST", body: { userId: currentUser.id, voicemail: false } });
+        sendToExtension({ action: "answerCall", convId });
         break;
       }
       default: console.warn("unhandled action", act);
     }
   } catch (e) {
+    if (e?.message === "AUTH_REDIRECT") return;
     console.error(e);
     showBanner({ type: "error", title: "Action failed", message: e?.message || String(e), autoHideMs: 5000 });
   }
 }
 
-function findAgentPartId(row) {
-  const agent = (row.raw.participants || []).reverse().find(p => p.purpose === "agent" && !p.endTime);
-  if (!agent) throw new Error("No agent participant to target");
-  return agent.id;
+async function actVoicemail(row) {
+  const convId = row.id;
+  const target = (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
+  if (!target) throw new Error("No participant to transfer");
+  await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, { method: "POST", body: { voicemail: true } });
+  showBanner({ type: "info", title: "Sent to voicemail", autoHideMs: 3000 });
 }
 
 function sendToExtension(msg) {
   if (!settings.extensionId) return;
-  try {
-    chrome?.runtime?.sendMessage(settings.extensionId, msg, (_resp) => { /* ignore */ });
-  } catch (e) { /* not a chrome env */ }
+  try { chrome?.runtime?.sendMessage(settings.extensionId, msg, () => {}); } catch {}
 }
 
-function openTransferModal(convId, partId) {
-  el("transferModal").classList.add("active");
-  const input = el("transferTo");
-  input.value = "";
-  input.focus();
-  el("transferCancel").onclick = () => el("transferModal").classList.remove("active");
+// ================================================================
+//  Modals — open/close helpers
+// ================================================================
+function openModal(id) { el(id).classList.add("active"); }
+function closeModal(id) { el(id).classList.remove("active"); }
+document.addEventListener("click", (e) => {
+  if (e.target.matches("[data-close]") || e.target.closest(".titlebar .x")) {
+    const m = e.target.closest(".modal-backdrop");
+    if (m) m.classList.remove("active");
+  }
+});
+
+// Transfer (blind)
+function openTransferModal(row) {
+  const convId = row.id;
+  const partId = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime)?.id
+              || (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime)?.id;
+  openModal("transferModal");
+  const input = el("transferTo"); input.value = ""; input.focus();
   el("transferGo").onclick = async () => {
-    const to = input.value.trim();
-    if (!to) return;
+    const to = input.value.trim(); if (!to) return;
     try {
       const body = /^\+?\d[\d \-().]{5,}/.test(to) ? { address: to } : { userId: to };
       await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`, { method: "POST", body });
-      el("transferModal").classList.remove("active");
-    } catch (e) {
-      showBanner({ type: "error", title: "Transfer failed", message: e?.message || String(e), autoHideMs: 5000 });
-    }
+      closeModal("transferModal");
+    } catch (e) { showBanner({ type: "error", title: "Transfer failed", message: e.message, autoHideMs: 5000 }); }
   };
 }
 
-// ================================================================
-//  Settings
-// ================================================================
-function loadSettings() {
-  try { const s = JSON.parse(localStorage.getItem(STORAGE.settings) || "{}"); settings = { extensionId: "", ...s }; } catch { settings = { extensionId: "" }; }
-  const sq = localStorage.getItem("gc_uvad_queues");
-  if (sq) { try { selectedQueueIds = JSON.parse(sq); } catch {} }
-}
-function saveSettings() {
-  localStorage.setItem(STORAGE.settings, JSON.stringify(settings));
-  localStorage.setItem("gc_uvad_queues", JSON.stringify(selectedQueueIds));
+// Consult transfer
+function openConsultModal(row) {
+  const convId = row.id;
+  const partId = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime)?.id;
+  if (!partId) return showBanner({ type: "error", title: "Consult needs your own leg", autoHideMs: 4000 });
+  openModal("consultModal");
+  const sel = el("consultQueue");
+  sel.innerHTML = [...queuesById.values()].sort((a, b) => a.name.localeCompare(b.name))
+    .map(q => `<option value="${escape(q.id)}">${escape(q.name)}</option>`).join("");
+  el("consultTabs").querySelectorAll(".mtab").forEach(t => t.onclick = () => {
+    el("consultTabs").querySelectorAll(".mtab").forEach(x => x.classList.toggle("active", x === t));
+    document.querySelectorAll("#consultModal .mpanel").forEach(p => p.classList.toggle("active", p.dataset.mp === t.dataset.mt));
+  });
+  el("consultGo").onclick = async () => {
+    try {
+      const which = el("consultTabs").querySelector(".mtab.active").dataset.mt;
+      if (which === "agent") {
+        const to = el("consultAgent").value.trim(); if (!to) return;
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, { method: "POST", body: { speakTo: "destination", destination: { userId: to } } });
+      } else if (which === "queue") {
+        const qid = el("consultQueue").value; if (!qid) return;
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, { method: "POST", body: { speakTo: "destination", destination: { queueId: qid } } });
+      } else {
+        const to = el("consultExt").value.trim(); if (!to) return;
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, { method: "POST", body: { speakTo: "destination", destination: { address: to } } });
+      }
+      closeModal("consultModal");
+    } catch (e) { showBanner({ type: "error", title: "Consult failed", message: e.message, autoHideMs: 5000 }); }
+  };
 }
 
+// Outbound
+function openOutboundModal() {
+  openModal("outboundModal");
+  const sel = el("outboundQueue");
+  sel.innerHTML = '<option value="">(personal)</option>' +
+    [...queuesById.values()].sort((a, b) => a.name.localeCompare(b.name))
+      .map(q => `<option value="${escape(q.id)}">${escape(q.name)}</option>`).join("");
+  el("outboundGo").onclick = async () => {
+    const num = el("outboundNumber").value.trim(); if (!num) return;
+    const qid = sel.value;
+    try {
+      const body = qid ? { phoneNumber: num, callFromQueueId: qid } : { phoneNumber: num };
+      await apiFetch("/api/v2/conversations/calls", { method: "POST", body });
+      closeModal("outboundModal");
+    } catch (e) { showBanner({ type: "error", title: "Call failed", message: e.message, autoHideMs: 5000 }); }
+  };
+}
+
+// Wrapup
+async function openWrapupModal(row) {
+  const convId = row.id;
+  const myPart = (row.raw.participants || []).find(p => p.userId === currentUser?.id);
+  if (!myPart) return;
+  const commId = (myPart.calls && myPart.calls[0]?.id) || myPart.communicationId;
+  if (row.queueId && !queueWrapupCodes.has(row.queueId)) await fetchQueueWrapupCodes(row.queueId);
+  const codes = queueWrapupCodes.get(row.queueId) || [];
+  el("wrapupCode").innerHTML = codes.map(w => `<option value="${escape(w.id)}">${escape(w.name)}</option>`).join("") ||
+    '<option value="">(no codes configured)</option>';
+  el("wrapupNotes").value = "";
+  openModal("wrapupModal");
+  el("wrapupGo").onclick = async () => {
+    const code = el("wrapupCode").value;
+    const notes = el("wrapupNotes").value.trim();
+    try {
+      await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPart.id}/communications/${commId}/wrapup`, {
+        method: "PATCH", body: { code, notes: notes || undefined, provisional: false }
+      });
+      closeModal("wrapupModal");
+    } catch (e) { showBanner({ type: "error", title: "Wrap-up failed", message: e.message, autoHideMs: 5000 }); }
+  };
+}
+
+// Settings
 async function openSettings() {
-  el("settingsModal").classList.add("active");
+  openModal("settingsModal");
   el("extensionIdInput").value = settings.extensionId || "";
+  el("envInput").value = CONFIG.environment;
   const list = el("queueList");
-  list.innerHTML = "<div style='padding:8px;color:var(--muted)'>Loading queues…</div>";
+  list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>Loading queues…</div>";
   try {
     if (queuesById.size < 3) await fetchAllQueues();
-    const all = [...queuesById.values()].sort((a,b) => a.name.localeCompare(b.name));
+    const all = [...queuesById.values()].sort((a, b) => a.name.localeCompare(b.name));
     list.innerHTML = all.map(q => {
       const checked = selectedQueueIds.includes(q.id) ? "checked" : "";
-      return `<label class="queue-picker-item"><input type="checkbox" data-qid="${q.id}" ${checked}/> ${escape(q.name)}</label>`;
+      return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${checked}/> ${escape(q.name)}</label>`;
     }).join("");
     list.querySelectorAll("input[type=checkbox]").forEach(cb => {
       cb.addEventListener("change", async () => {
@@ -830,82 +1582,295 @@ async function openSettings() {
         else { selectedQueueIds = selectedQueueIds.filter(x => x !== qid); }
         if (!activeTabQueueId || !selectedQueueIds.includes(activeTabQueueId)) activeTabQueueId = selectedQueueIds[0] || null;
         saveSettings();
+        if (activeTabQueueId) { fetchQueueMembers(activeTabQueueId).then(renderAll); }
         renderAll();
         try { await refreshSubscriptions(); } catch {}
       });
     });
   } catch (e) {
-    list.innerHTML = `<div style='padding:8px;color:var(--red)'>Queue load failed: ${escape(e.message)}</div>`;
+    list.innerHTML = `<div style='padding:8px;color:#c00'>Queue load failed: ${escape(e.message)}</div>`;
   }
   el("extensionIdInput").oninput = () => { settings.extensionId = el("extensionIdInput").value.trim(); saveSettings(); };
-  el("settingsClose").onclick = () => el("settingsModal").classList.remove("active");
+  el("envInput").onchange = () => { CONFIG.environment = el("envInput").value.trim(); saveSettings(); };
+  el("settingsClose").onclick = () => closeModal("settingsModal");
+}
+
+// Columns customization
+function openColsModal() {
+  openModal("colsModal");
+  const render = (host, current, setList) => {
+    const h = el(host);
+    h.innerHTML = Object.entries(COLUMNS).map(([k, c]) => {
+      const checked = current.includes(k) ? "checked" : "";
+      return `<label class="queue-picker-item"><input type="checkbox" data-col="${k}" ${checked}/> ${escape(c.label || k)}</label>`;
+    }).join("");
+    h.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
+      const k = cb.dataset.col;
+      if (cb.checked && !current.includes(k)) current.push(k);
+      else if (!cb.checked) { const i = current.indexOf(k); if (i >= 0) current.splice(i, 1); }
+      setList(current);
+      saveCols();
+      renderAll();
+    }));
+  };
+  render("colsMyList", myCols, x => myCols = x);
+  render("colsQueueList", queueCols, x => queueCols = x);
+  el("colsReset").onclick = () => {
+    myCols = [...DEFAULT_MY_COLS]; queueCols = [...DEFAULT_QUEUE_COLS];
+    saveCols(); renderAll();
+    render("colsMyList", myCols, x => myCols = x);
+    render("colsQueueList", queueCols, x => queueCols = x);
+  };
 }
 
 // ================================================================
-//  Row selection / context menu
+//  Settings persistence
+// ================================================================
+function loadSettings() {
+  try { settings = { extensionId: "", ...JSON.parse(localStorage.getItem(STORAGE.settings) || "{}") }; } catch { settings = { extensionId: "" }; }
+  try { const s = localStorage.getItem(STORAGE.queues); if (s) selectedQueueIds = JSON.parse(s); } catch {}
+  try { const s = localStorage.getItem(STORAGE.colsMy); if (s) myCols = JSON.parse(s); } catch {}
+  try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = JSON.parse(s); } catch {}
+  try { const s = localStorage.getItem(STORAGE.statsGroupState); if (s) statsGroupState = JSON.parse(s); } catch {}
+}
+function saveSettings() {
+  localStorage.setItem(STORAGE.settings, JSON.stringify(settings));
+  localStorage.setItem(STORAGE.queues, JSON.stringify(selectedQueueIds));
+}
+function saveCols() {
+  localStorage.setItem(STORAGE.colsMy, JSON.stringify(myCols));
+  localStorage.setItem(STORAGE.colsQueue, JSON.stringify(queueCols));
+}
+
+// ================================================================
+//  Menu bar + toolbar wiring
+// ================================================================
+function wireMenuBar() {
+  const mb = el("menuBar");
+  mb.querySelectorAll(".item[data-menu]").forEach(item => {
+    item.addEventListener("click", (e) => {
+      const wasOpen = item.classList.contains("open");
+      mb.querySelectorAll(".item").forEach(x => x.classList.remove("open"));
+      if (!wasOpen) item.classList.add("open");
+      e.stopPropagation();
+    });
+    item.addEventListener("mouseenter", () => {
+      if (mb.querySelector(".item.open") && !item.classList.contains("open")) {
+        mb.querySelectorAll(".item").forEach(x => x.classList.remove("open"));
+        item.classList.add("open");
+      }
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".menu-bar")) mb.querySelectorAll(".item").forEach(x => x.classList.remove("open"));
+  });
+  mb.querySelectorAll(".mi[data-cmd]").forEach(mi => mi.addEventListener("click", (e) => {
+    e.stopPropagation();
+    mb.querySelectorAll(".item").forEach(x => x.classList.remove("open"));
+    handleMenuCmd(mi.dataset.cmd);
+  }));
+}
+
+function handleMenuCmd(cmd) {
+  switch (cmd) {
+    case "makeCall": openOutboundModal(); break;
+    case "logout": clearAuth(); location.reload(); break;
+    case "settings": openSettings(); break;
+    case "toggleSidebar": toggleRightCol(); break;
+    case "toggleDirectory": toggleDir(); break;
+    case "customizeCols": openColsModal(); break;
+    case "reload": location.reload(); break;
+    case "popout": triggerPopout(); break;
+    case "popin":
+      if (isPopoutMode()) window.close();
+      else if (broadcastChannel) broadcastChannel.postMessage("popin-requested");
+      break;
+    case "about": showBanner({ type: "info", title: "UVA Dashboard", message: "Genesys Cloud queue view — PureConnect parity build", autoHideMs: 4000 }); break;
+  }
+}
+
+function wireToolbar() {
+  el("toolbar").querySelectorAll(".tbtn").forEach(b => b.addEventListener("click", () => {
+    const act = b.dataset.act;
+    const row = selectedCallId ? conversations.get(selectedCallId) : null;
+    doAction(act, row);
+  }));
+}
+
+function toggleRightCol() {
+  const rc = el("rightCol");
+  rc.classList.toggle("collapsed");
+  const hidden = rc.classList.contains("collapsed");
+  el("checkSidebar").textContent = hidden ? "" : "✓";
+  localStorage.setItem(STORAGE.sidebarCollapsed, hidden ? "1" : "0");
+}
+function toggleDir() {
+  const p = el("dirPanel");
+  const hide = p.style.display !== "none" ? "none" : "";
+  p.style.display = hide;
+  el("checkDir").textContent = hide === "none" ? "" : "✓";
+}
+
+// ================================================================
+//  Row selection / context menu / header context menu
 // ================================================================
 function wireRowSelection() {
   document.addEventListener("click", (e) => {
+    // row click
     const tr = e.target.closest("tr.row");
     if (tr) {
       selectedCallId = tr.dataset.id;
       selectedCallScope = tr.dataset.scope;
       renderAll();
     }
+    // tab click / close
     const tab = e.target.closest(".tab");
     if (tab) {
       const closeBtn = e.target.closest(".close");
       if (closeBtn) {
-        const qid = closeBtn.dataset.close;
+        const qid = closeBtn.dataset.closeQid;
         selectedQueueIds = selectedQueueIds.filter(x => x !== qid);
         if (activeTabQueueId === qid) activeTabQueueId = selectedQueueIds[0] || null;
-        saveSettings();
-        renderAll();
-        refreshSubscriptions().catch(()=>{});
+        saveSettings(); renderAll();
+        if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+        refreshSubscriptions().catch(() => {});
       } else {
         activeTabQueueId = tab.dataset.qid;
+        if (!queueMembers.has(activeTabQueueId)) fetchQueueMembers(activeTabQueueId).then(renderAll);
+        refreshSubscriptions().catch(() => {});
         renderAll();
       }
     }
-    const menu = el("ctxMenu");
-    if (!e.target.closest(".ctx-menu")) menu.classList.remove("active");
+    // dismiss ctx menus
+    if (!e.target.closest(".ctx-menu")) {
+      el("ctxMenu").classList.remove("active");
+      el("colHeaderCtx").classList.remove("active");
+    }
   });
+
+  // Row right-click
   document.addEventListener("contextmenu", (e) => {
+    const th = e.target.closest("th[data-col]");
+    if (th) {
+      e.preventDefault();
+      showColumnHeaderMenu(e.clientX, e.clientY, th.dataset.scope);
+      return;
+    }
     const tr = e.target.closest("tr.row");
     if (!tr) return;
     e.preventDefault();
     selectedCallId = tr.dataset.id;
     selectedCallScope = tr.dataset.scope;
     renderAll();
-    showContextMenu(e.clientX, e.clientY);
+    showRowContextMenu(e.clientX, e.clientY);
   });
 }
 
-function showContextMenu(x, y) {
-  const row = conversations.get(selectedCallId);
-  if (!row) return;
+function showRowContextMenu(x, y) {
+  const row = conversations.get(selectedCallId); if (!row) return;
   const menu = el("ctxMenu");
   const items = [];
   if (row.hasMe) {
-    items.push({ label: "Hold", act: row.state === "held" ? "unhold" : "hold" });
+    items.push({ label: row.stateKey === "alerting" ? "Answer" : "Pick Up", act: row.stateKey === "alerting" ? "answer" : "pickup" });
+    items.push({ label: row.held ? "Unhold" : "Hold", act: "hold" });
     items.push({ label: "Mute", act: "mute" });
+    items.push({ sep: true });
     items.push({ label: "Transfer…", act: "transfer" });
+    items.push({ label: "Consult…", act: "consult" });
+    items.push({ label: "Voicemail", act: "voicemail" });
+    items.push({ sep: true });
+    items.push({ label: row.recording ? "Stop Recording" : "Record", act: "record" });
+    items.push({ label: "Secure Pause", act: "pause" });
+    items.push({ label: "Wrap-up…", act: "wrapup" });
     items.push({ sep: true });
     items.push({ label: "Disconnect", act: "disconnect", danger: true });
   } else {
     items.push({ label: "Pick Up", act: "pickup" });
+    if (row.stateKey === "alerting") items.push({ label: "Steal from agent", act: "steal" });
     items.push({ sep: true });
     items.push({ label: "Listen", act: "listen" });
     items.push({ label: "Coach", act: "coach" });
     items.push({ label: "Join", act: "barge" });
+    items.push({ sep: true });
+    items.push({ label: "Voicemail", act: "voicemail" });
+    items.push({ label: "Transfer…", act: "transfer" });
   }
-  menu.innerHTML = items.map(i => i.sep ? `<div class="sep"></div>` : `<div class="item" data-act="${i.act}" style="${i.danger ? 'color:var(--red)' : ''}">${i.label}</div>`).join("");
+  menu.innerHTML = items.map(i => i.sep
+    ? `<div class="sep"></div>`
+    : `<div class="item ${i.danger ? 'danger' : ''}" data-act="${i.act}">${escape(i.label)}</div>`).join("");
   menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
-  menu.querySelectorAll(".item").forEach(n => n.addEventListener("click", () => {
+  menu.querySelectorAll(".item[data-act]").forEach(n => n.addEventListener("click", () => {
     menu.classList.remove("active");
-    const r = conversations.get(selectedCallId);
-    if (r) doAction(n.dataset.act, r);
+    doAction(n.dataset.act, conversations.get(selectedCallId));
   }));
+}
+
+function showColumnHeaderMenu(x, y, scope) {
+  const menu = el("colHeaderCtx");
+  const list = scope === "my" ? myCols : queueCols;
+  const setter = scope === "my" ? (v) => myCols = v : (v) => queueCols = v;
+  menu.innerHTML = Object.entries(COLUMNS).map(([k, c]) => {
+    const on = list.includes(k);
+    return `<div class="item" data-colkey="${k}"><span class="check">${on ? "✓" : ""}</span>${escape(c.label || k)}</div>`;
+  }).join("") + `<div class="sep"></div><div class="item" data-colkey="__reset">Reset to defaults</div>`;
+  menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+  menu.querySelectorAll(".item[data-colkey]").forEach(n => n.addEventListener("click", () => {
+    const k = n.dataset.colkey;
+    if (k === "__reset") {
+      setter(scope === "my" ? [...DEFAULT_MY_COLS] : [...DEFAULT_QUEUE_COLS]);
+    } else {
+      const cur = [...list];
+      const i = cur.indexOf(k);
+      if (i >= 0) cur.splice(i, 1); else cur.push(k);
+      setter(cur);
+    }
+    saveCols(); renderAll();
+    menu.classList.remove("active");
+  }));
+}
+
+// ================================================================
+//  Drag-drop merge
+// ================================================================
+let dragSrc = null;
+function wireDragDrop() {
+  document.addEventListener("dragstart", (e) => {
+    const tr = e.target.closest("tr.row"); if (!tr) return;
+    dragSrc = tr.dataset.id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", tr.dataset.id);
+  });
+  document.addEventListener("dragover", (e) => {
+    const tr = e.target.closest("tr.row");
+    if (!tr) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    document.querySelectorAll("tr.row.drop-target").forEach(x => x.classList.remove("drop-target"));
+    if (tr.dataset.id !== dragSrc) tr.classList.add("drop-target");
+  });
+  document.addEventListener("dragleave", (e) => {
+    const tr = e.target.closest("tr.row");
+    if (tr) tr.classList.remove("drop-target");
+  });
+  document.addEventListener("drop", async (e) => {
+    const tr = e.target.closest("tr.row"); if (!tr) return;
+    e.preventDefault();
+    const destId = tr.dataset.id;
+    const srcId = dragSrc; dragSrc = null;
+    document.querySelectorAll("tr.row.drop-target").forEach(x => x.classList.remove("drop-target"));
+    if (!srcId || !destId || srcId === destId) return;
+    try { await mergeCalls(srcId, destId); }
+    catch (e2) { showBanner({ type: "error", title: "Merge failed", message: e2.message, autoHideMs: 5000 }); }
+  });
+}
+
+async function mergeCalls(srcId, destId) {
+  await ensureMaxConf();
+  const src = conversations.get(srcId); const dest = conversations.get(destId);
+  if (!src || !dest) throw new Error("Missing conversation");
+  // POST /conversations/calls with call1 + call2
+  await apiFetch("/api/v2/conversations/calls", { method: "POST", body: { callIds: [srcId, destId] } });
+  showBanner({ type: "info", title: "Merged", message: `Conferenced ${src.name || srcId} + ${dest.name || destId}`, autoHideMs: 3000 });
 }
 
 // ================================================================
@@ -915,43 +1880,44 @@ const POPOUT_KEY = "gc_uvad_popout_active";
 const POPOUT_CHANNEL = "gc_uvad_popout";
 let popoutWindow = null;
 let broadcastChannel = null;
-
 function isPopoutMode() { return new URLSearchParams(window.location.search).get("mode") === "popout"; }
 
 function initBroadcast() {
   try {
     broadcastChannel = new BroadcastChannel(POPOUT_CHANNEL);
     broadcastChannel.onmessage = (e) => {
-      if (e.data === "popout-opened" && !isPopoutMode()) el("popoutPlaceholder").classList.add("active"), el("mainContent").style.display = "none";
-      else if (e.data === "popout-closed" && !isPopoutMode()) el("popoutPlaceholder").classList.remove("active"), el("mainContent").style.display = "";
-      else if (e.data === "popin-requested" && isPopoutMode()) window.close();
+      if (e.data === "popout-opened" && !isPopoutMode()) {
+        el("popoutPlaceholder").classList.add("active");
+        el("mainContent").style.display = "none";
+      } else if (e.data === "popout-closed" && !isPopoutMode()) {
+        el("popoutPlaceholder").classList.remove("active");
+        el("mainContent").style.display = "";
+      } else if (e.data === "popin-requested" && isPopoutMode()) {
+        window.close();
+      }
     };
   } catch {}
 }
-
 function buildPopoutUrl() {
   const u = new URL(window.location.href);
   u.searchParams.set("mode", "popout");
   u.searchParams.delete("code"); u.searchParams.delete("state"); u.searchParams.delete("error");
   return u.toString();
 }
-
-function openPopout(e) {
-  if (popoutWindow && !popoutWindow.closed) { e.preventDefault(); popoutWindow.focus(); return; }
+function triggerPopout() {
+  if (isPopoutMode()) { showBanner({ type: "info", title: "Already in pop-out window", autoHideMs: 2500 }); return; }
+  if (popoutWindow && !popoutWindow.closed) { popoutWindow.focus(); return; }
   const tok = sessionStorage.getItem(STORAGE.token);
   const exp = sessionStorage.getItem(STORAGE.tokenExpiresAt);
   if (tok) localStorage.setItem("gc_uvad_popout_token", tok);
   if (exp) localStorage.setItem("gc_uvad_popout_token_expires", exp);
-  const url = buildPopoutUrl();
-  popoutWindow = window.open(url, "uvad_popout", "width=1100,height=780,menubar=no,toolbar=no,resizable=yes,scrollbars=yes");
-  if (popoutWindow) { e.preventDefault(); }
+  popoutWindow = window.open(buildPopoutUrl(), "uvad_popout", "width=1200,height=800,menubar=no,toolbar=no,resizable=yes,scrollbars=yes");
   localStorage.setItem(POPOUT_KEY, "true");
   if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
   el("popoutPlaceholder").classList.add("active"); el("mainContent").style.display = "none";
   const poll = setInterval(() => {
     if (popoutWindow && popoutWindow.closed) {
-      clearInterval(poll);
-      popoutWindow = null;
+      clearInterval(poll); popoutWindow = null;
       localStorage.removeItem(POPOUT_KEY);
       if (broadcastChannel) broadcastChannel.postMessage("popout-closed");
       el("popoutPlaceholder").classList.remove("active"); el("mainContent").style.display = "";
@@ -966,17 +1932,6 @@ function setupPopoutMode() {
     sessionStorage.setItem(STORAGE.token, popToken);
     if (popExp) sessionStorage.setItem(STORAGE.tokenExpiresAt, popExp);
   }
-  const btn = el("popoutBtn");
-  if (btn) {
-    btn.textContent = "⤡ Pop In";
-    btn.title = "Return to iframe";
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      if (broadcastChannel) broadcastChannel.postMessage("popin-requested");
-      localStorage.removeItem(POPOUT_KEY);
-      window.close();
-    });
-  }
   if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
 }
 
@@ -985,24 +1940,26 @@ function setupPopoutMode() {
 // ================================================================
 async function init() {
   if (el("app-root").style.display !== "flex") return;
+
   loadSettings();
   initBroadcast();
   if (isPopoutMode()) setupPopoutMode();
 
-  el("popoutBtn").addEventListener("mousedown", () => {
-    const tok = sessionStorage.getItem(STORAGE.token);
-    const exp = sessionStorage.getItem(STORAGE.tokenExpiresAt);
-    if (tok) localStorage.setItem("gc_uvad_popout_token", tok);
-    if (exp) localStorage.setItem("gc_uvad_popout_token_expires", exp);
-    el("popoutBtn").href = buildPopoutUrl();
-  });
-  if (!isPopoutMode()) el("popoutBtn").addEventListener("click", openPopout);
-
-  el("logoutBtn").addEventListener("click", () => { clearAuth(); setStatus("Logged out"); });
-  el("settingsBtn").addEventListener("click", openSettings);
-  el("addTabBtn").addEventListener("click", openSettings);
-
+  wireMenuBar();
+  wireToolbar();
   wireRowSelection();
+  wireDragDrop();
+  startClock();
+
+  if (localStorage.getItem(STORAGE.sidebarCollapsed) === "1") {
+    el("rightCol").classList.add("collapsed");
+    el("checkSidebar").textContent = "";
+  }
+  el("popinFromPlaceholder").addEventListener("click", () => {
+    if (broadcastChannel) broadcastChannel.postMessage("popin-requested");
+    el("popoutPlaceholder").classList.remove("active");
+    el("mainContent").style.display = "";
+  });
 
   const url = new URL(window.location.href);
   const code = url.searchParams.get("code");
@@ -1018,13 +1975,15 @@ async function init() {
     if (!activeTabQueueId && selectedQueueIds.length > 0) activeTabQueueId = selectedQueueIds[0];
     await ensureChannel();
     await refreshSubscriptions();
+    if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+    ensureMaxConf().catch(() => {});
     startDurationTick();
     renderAll();
-    setStatus("Live","ok");
+    setStatus("Live", "ok");
   } catch (e) {
     if (e?.message === "AUTH_REDIRECT" || authRedirectInProgress) return;
     console.error(e);
-    setStatus("Error","err");
+    setStatus("Error", "err");
     showBanner({ type: "error", title: "Startup failed", message: e?.message || String(e) });
   }
 }
