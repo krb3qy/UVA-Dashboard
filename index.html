@@ -575,9 +575,20 @@
   <div class="modal">
     <div class="titlebar"><span>Settings</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
-      <label>Monitored queues (checked queues open as tabs)</label>
+      <label>Monitored queues — checked queues open as single-queue tabs</label>
       <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
-      <div id="queueList" style="max-height:30vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
+      <div id="queueList" style="max-height:26vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
+
+      <label style="margin-top:14px">Tab Groups — hold N queues under one renamable tab</label>
+      <div id="tabGroupsList" style="max-height:24vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+        <input type="text" id="newGroupName" placeholder="New group name (e.g. Transfer Center)" style="flex:1" />
+        <select id="newGroupDivision" style="max-width:180px"><option value="">(no division filter)</option></select>
+        <button class="btn btn-sm" id="newGroupCreate">+ Add group</button>
+      </div>
+      <div style="font-size:11px;color:var(--win-muted);margin-top:4px">
+        Pick a division to auto-fill all its queues, or leave blank and add queues by hand after.
+      </div>
       <label style="margin-top:12px">Emergency queue (fires in-dashboard alert when calls arrive)</label>
       <select id="emergencyQueueSel"><option value="">(none)</option></select>
       <label style="margin-top:12px">Alert delivery</label>
@@ -891,8 +902,55 @@ const queueMembers = new Map();    // queueId → Set of userIds
 const queueStats = new Map();      // queueId → observation object
 const queueWrapupCodes = new Map(); // queueId → [wrapup codes]
 let currentUser = null;            // {id, name, stationId, ...}
-let selectedQueueIds = [];         // tabs in order
+// Tab-group model: each tab can hold 1..N queues with an optional name
+// and optional division filter. Single-queue tabs behave exactly like the
+// old model. Multi-queue tabs show calls from any included queue and can
+// be renamed. Division-scoped tabs auto-populate their queueIds with every
+// queue in that division.
+let queueTabs = [];                // [{ id, name, queueIds:[], divisionId?:string }]
+let activeTabId = null;            // tab id, not a queueId
+// Legacy derived: selectedQueueIds = union of queueIds across all tabs.
+// activeTabQueueId = primary queue of the active tab (first in its queueIds).
+let selectedQueueIds = [];
 let activeTabQueueId = null;
+let divisionsById = new Map();     // cache
+
+function refreshDerivedQueueState() {
+  const union = new Set();
+  for (const t of queueTabs) for (const q of t.queueIds) union.add(q);
+  selectedQueueIds = [...union];
+  const t = queueTabs.find(x => x.id === activeTabId);
+  activeTabQueueId = (t && t.queueIds[0]) || null;
+}
+function activeTabQueueIds() {
+  const t = queueTabs.find(x => x.id === activeTabId);
+  return t ? t.queueIds : [];
+}
+function activeTab() { return queueTabs.find(t => t.id === activeTabId) || null; }
+function newTabId() { return "t_" + Math.random().toString(36).slice(2, 10); }
+
+function saveQueueTabs() {
+  try { localStorage.setItem("gc_uvad_queue_tabs_v2", JSON.stringify(queueTabs)); } catch {}
+  try { localStorage.setItem("gc_uvad_queue_tabs_active", activeTabId || ""); } catch {}
+}
+function loadQueueTabs() {
+  try {
+    const raw = localStorage.getItem("gc_uvad_queue_tabs_v2");
+    if (raw) { queueTabs = JSON.parse(raw) || []; }
+  } catch { queueTabs = []; }
+  try { activeTabId = localStorage.getItem("gc_uvad_queue_tabs_active") || null; } catch {}
+  // Migrate old single-queue storage if present and new model is empty.
+  if (queueTabs.length === 0) {
+    try {
+      const legacy = JSON.parse(localStorage.getItem(STORAGE.queues) || "[]");
+      queueTabs = legacy.map(qid => ({ id: newTabId(), name: "", queueIds: [qid], divisionId: null }));
+      if (queueTabs.length > 0) activeTabId = queueTabs[0].id;
+    } catch {}
+  }
+  // Sanity: ensure activeTabId points at an existing tab.
+  if (!queueTabs.find(t => t.id === activeTabId)) activeTabId = queueTabs[0]?.id || null;
+  refreshDerivedQueueState();
+}
 let selectedCallId = null;
 let selectedCallScope = null;      // "my" | "queue"
 let selectedDirUserId = null;
@@ -1289,6 +1347,30 @@ async function fetchCurrentUser() {
     routingStatus: me.routingStatus?.status || ""
   });
 }
+async function fetchAllDivisions() {
+  try {
+    const r = await apiFetch(`/api/v2/authorization/divisions?pageSize=100`);
+    divisionsById.clear();
+    for (const d of r?.entities || []) divisionsById.set(d.id, { id: d.id, name: d.name });
+  } catch (e) { console.warn("divisions fetch failed", e); }
+}
+
+// Queues scoped to a division (paginated).
+async function fetchQueuesInDivision(divisionId) {
+  const out = [];
+  let page = 1;
+  while (true) {
+    const r = await apiFetch(`/api/v2/routing/queues?pageSize=100&pageNumber=${page}&divisionId=${encodeURIComponent(divisionId)}`);
+    for (const q of r?.entities || []) {
+      out.push(q.id);
+      queuesById.set(q.id, { id: q.id, name: q.name });
+    }
+    if (!r?.entities || r.entities.length < 100) break;
+    page++; if (page > 20) break;
+  }
+  return out;
+}
+
 async function fetchAllQueues() {
   let page = 1;
   while (true) {
@@ -1439,15 +1521,19 @@ function renderMy() {
 
 function renderQueue() {
   const empty = el("queueEmpty");
-  if (!activeTabQueueId) {
+  const tab = activeTab();
+  const qids = activeTabQueueIds();
+  if (!tab || qids.length === 0) {
     el("queueBody").innerHTML = "";
     empty.textContent = "No queue selected — click + Queue";
     empty.style.display = "block"; return;
   }
-  const rows = [...conversations.values()].filter(r => r.queueId === activeTabQueueId);
+  const qidSet = new Set(qids);
+  const rows = [...conversations.values()].filter(r => r.queueId && qidSet.has(r.queueId));
   el("queueBody").innerHTML = rows.map(r => renderRow(r, "queue")).join("");
   if (rows.length === 0) {
-    empty.textContent = `No calls in ${queuesById.get(activeTabQueueId)?.name || activeTabQueueId}`;
+    const label = tab.name || (qids.length === 1 ? (queuesById.get(qids[0])?.name || qids[0]) : `${qids.length} queues`);
+    empty.textContent = `No calls in ${label}`;
     empty.style.display = "block";
   } else {
     empty.style.display = "none";
@@ -1456,17 +1542,21 @@ function renderQueue() {
 
 function renderTabs() {
   const bar = el("tabBar");
-  const tabs = selectedQueueIds.map(qid => {
-    const qn = queuesById.get(qid)?.name || qid;
-    const count = [...conversations.values()].filter(r => r.queueId === qid).length;
-    const active = activeTabQueueId === qid ? " active" : "";
-    return `<div class="tab${active}" data-qid="${escape(qid)}">
-      <span>${escape(qn)}</span>
+  const tabs = queueTabs.map(t => {
+    const label = t.name || (t.queueIds.length === 1
+      ? (queuesById.get(t.queueIds[0])?.name || t.queueIds[0])
+      : `Group (${t.queueIds.length})`);
+    const qidSet = new Set(t.queueIds);
+    const count = [...conversations.values()].filter(r => r.queueId && qidSet.has(r.queueId)).length;
+    const active = activeTabId === t.id ? " active" : "";
+    const icon = t.queueIds.length > 1 ? "📁 " : (t.divisionId ? "⛶ " : "");
+    return `<div class="tab${active}" data-tab-id="${escape(t.id)}" data-qid="${escape(t.queueIds[0] || '')}" title="${escape(label)}${t.queueIds.length > 1 ? ` · ${t.queueIds.length} queues` : ''}">
+      <span>${icon}${escape(label)}</span>
       <span class="count">${count}</span>
-      <span class="close" data-close-qid="${escape(qid)}">✕</span>
+      <span class="close" data-close-tab-id="${escape(t.id)}" title="Remove tab">✕</span>
     </div>`;
   }).join("");
-  bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn">+ Queue</button>`;
+  bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn" title="Add or manage queue tabs">+ Queue</button>`;
   el("addTabBtn").addEventListener("click", openSettings);
 }
 
@@ -2116,7 +2206,9 @@ async function openSettings() {
   list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>Loading queues…</div>";
   try {
     if (queuesById.size < 3) await fetchAllQueues();
+    if (divisionsById.size === 0) await fetchAllDivisions();
     renderQueueList("");
+    renderTabGroupsSection();
     // Populate emergency-queue dropdown from monitored queues.
     const emg = el("emergencyQueueSel");
     emg.innerHTML = '<option value="">(none)</option>' +
@@ -2137,42 +2229,157 @@ async function openSettings() {
 function renderQueueList(filter) {
   const list = el("queueList");
   const f = (filter || "").trim().toLowerCase();
+  const watched = new Set(selectedQueueIds);
   const all = [...queuesById.values()]
     .filter(q => !f || (q.name || "").toLowerCase().includes(f) || q.id.toLowerCase().includes(f))
     .sort((a, b) => {
-      const aSel = selectedQueueIds.includes(a.id), bSel = selectedQueueIds.includes(b.id);
+      const aSel = watched.has(a.id), bSel = watched.has(b.id);
       if (aSel !== bSel) return aSel ? -1 : 1;
       return (a.name || "").localeCompare(b.name || "");
     });
   if (all.length === 0) { list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>No matches</div>"; return; }
   list.innerHTML = all.map(q => {
-    const checked = selectedQueueIds.includes(q.id) ? "checked" : "";
-    return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${checked}/> ${escape(q.name)}</label>`;
+    const hasSingle = queueTabs.some(t => t.queueIds.length === 1 && t.queueIds[0] === q.id);
+    const checked = hasSingle ? "checked" : "";
+    return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${checked}/> ${escape(q.name)}${watched.has(q.id) && !hasSingle ? ' <span style="color:var(--win-muted);font-size:10px">(in group)</span>' : ''}</label>`;
   }).join("");
   list.querySelectorAll("input[type=checkbox]").forEach(cb => {
     cb.addEventListener("change", async () => {
       const qid = cb.dataset.qid;
       if (cb.checked) {
-        if (!selectedQueueIds.includes(qid)) selectedQueueIds.push(qid);
-        // Warm per-queue column config from localStorage if present.
+        // Creates a single-queue tab. Multi-queue grouping is managed
+        // separately in the Tab Groups section.
+        if (!queueTabs.some(t => t.queueIds.length === 1 && t.queueIds[0] === qid)) {
+          queueTabs.push({ id: newTabId(), name: "", queueIds: [qid], divisionId: null });
+        }
         try {
           const raw = localStorage.getItem(`${STORAGE.colsQueue}:${qid}`);
           if (raw) queueColsByQueue.set(qid, JSON.parse(raw));
         } catch {}
+      } else {
+        // Remove any single-queue tab whose only queue is this qid.
+        queueTabs = queueTabs.filter(t => !(t.queueIds.length === 1 && t.queueIds[0] === qid));
+        // Also drop this qid from multi-queue tabs so the user sees it reflected.
+        for (const t of queueTabs) t.queueIds = t.queueIds.filter(x => x !== qid);
+        // Purge rows that are no longer in any tab and not mine.
+        refreshDerivedQueueState();
+        const watched = new Set(selectedQueueIds);
+        for (const [id, r] of [...conversations]) if (r.queueId && !watched.has(r.queueId) && !r.hasMe) conversations.delete(id);
       }
-      else {
-        selectedQueueIds = selectedQueueIds.filter(x => x !== qid);
-        // Purge rows that belonged only to the unselected queue
-        for (const [id, r] of [...conversations]) if (r.queueId === qid && !r.hasMe) conversations.delete(id);
-      }
-      if (!activeTabQueueId || !selectedQueueIds.includes(activeTabQueueId)) activeTabQueueId = selectedQueueIds[0] || null;
-      saveSettings();
+      refreshDerivedQueueState();
+      if (!activeTabId || !queueTabs.find(t => t.id === activeTabId)) activeTabId = queueTabs[0]?.id || null;
+      refreshDerivedQueueState();
+      saveQueueTabs();
       renderAll();
+      renderTabGroupsSection();
       try { await refreshSubscriptions(); } catch {}
       if (cb.checked) seedQueueCalls(qid).then(renderAll).catch(() => {});
       if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
     });
   });
+}
+
+// ================================================================
+//  Tab Groups — render editable list inside Settings modal
+// ================================================================
+function renderTabGroupsSection() {
+  const host = el("tabGroupsList");
+  if (!host) return;   // Settings modal not open
+  const groupTabs = queueTabs.filter(t => t.queueIds.length > 1 || t.name || t.divisionId);
+  if (groupTabs.length === 0) {
+    host.innerHTML = '<div class="empty-msg" style="padding:8px">No tab groups yet. Create one below.</div>';
+  } else {
+    host.innerHTML = groupTabs.map(t => {
+      const div = t.divisionId ? (divisionsById.get(t.divisionId)?.name || t.divisionId) : "";
+      const queueLabels = t.queueIds.map(q => queuesById.get(q)?.name || q).slice(0, 4).join(", ")
+        + (t.queueIds.length > 4 ? ` +${t.queueIds.length - 4}` : "");
+      return `<div class="queue-picker-item" style="flex-wrap:wrap;gap:4px">
+        <input type="text" data-rename-tab="${escape(t.id)}" value="${escape(t.name)}" placeholder="Tab name…" style="flex:1;min-width:120px" />
+        ${div ? `<span style="background:#d4e0f5;border:1px solid #8aa8d8;padding:0 6px;border-radius:2px;font-size:10px">div: ${escape(div)}</span>` : ""}
+        <button class="btn btn-sm" data-edit-queues="${escape(t.id)}">Queues (${t.queueIds.length})</button>
+        <button class="btn btn-sm" data-del-tab="${escape(t.id)}">Delete</button>
+        <div style="flex-basis:100%;color:var(--win-muted);font-size:10px;margin-left:4px">${escape(queueLabels)}</div>
+      </div>`;
+    }).join("");
+    host.querySelectorAll("[data-rename-tab]").forEach(inp => inp.onchange = () => {
+      const t = queueTabs.find(x => x.id === inp.dataset.renameTab); if (t) { t.name = inp.value.trim(); saveQueueTabs(); renderAll(); }
+    });
+    host.querySelectorAll("[data-del-tab]").forEach(b => b.onclick = () => {
+      queueTabs = queueTabs.filter(x => x.id !== b.dataset.delTab);
+      if (activeTabId === b.dataset.delTab) activeTabId = queueTabs[0]?.id || null;
+      refreshDerivedQueueState(); saveQueueTabs();
+      renderTabGroupsSection(); renderAll();
+      refreshSubscriptions().catch(() => {});
+    });
+    host.querySelectorAll("[data-edit-queues]").forEach(b => b.onclick = () => openEditTabQueuesModal(b.dataset.editQueues));
+  }
+
+  // Populate new-group division dropdown
+  const divSel = el("newGroupDivision");
+  if (divSel) {
+    divSel.innerHTML = '<option value="">(no division filter)</option>' +
+      [...divisionsById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+        .map(d => `<option value="${escape(d.id)}">${escape(d.name)}</option>`).join("");
+  }
+  const createBtn = el("newGroupCreate");
+  if (createBtn) {
+    createBtn.onclick = async () => {
+      const name = el("newGroupName").value.trim();
+      const divisionId = el("newGroupDivision").value || null;
+      if (!name) { showBanner({ type: "warn", title: "Name required for group", autoHideMs: 2500 }); return; }
+      let qids = [];
+      if (divisionId) {
+        try { qids = await fetchQueuesInDivision(divisionId); }
+        catch (e) { showBanner({ type: "error", title: "Division queue fetch failed", message: e.message, autoHideMs: 4000 }); return; }
+      }
+      const tab = { id: newTabId(), name, queueIds: qids, divisionId };
+      queueTabs.push(tab);
+      if (!activeTabId) activeTabId = tab.id;
+      refreshDerivedQueueState(); saveQueueTabs();
+      el("newGroupName").value = "";
+      el("newGroupDivision").value = "";
+      renderTabGroupsSection(); renderAll();
+      refreshSubscriptions().catch(() => {});
+      for (const qid of qids) seedQueueCalls(qid).catch(() => {});
+    };
+  }
+}
+
+// Edit queues-in-tab modal (simple reuse of the outer queue list)
+function openEditTabQueuesModal(tabId) {
+  const tab = queueTabs.find(t => t.id === tabId); if (!tab) return;
+  // Build a lightweight prompt UI using the existing Tab Groups host.
+  const host = el("tabGroupsList");
+  if (!host) return;
+  const members = new Set(tab.queueIds);
+  const all = [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  host.innerHTML = `
+    <div style="padding:6px 8px;background:#f6f6f6;border-bottom:1px solid var(--win-border);font-weight:600">
+      Editing queues for "${escape(tab.name || "(unnamed)")}"
+      <button class="btn btn-sm" id="editTabDone" style="float:right">Done</button>
+    </div>
+    <input type="text" id="editTabFilter" placeholder="Filter…" style="width:100%;padding:3px 6px" />
+    <div id="editTabQList" style="max-height:30vh;overflow:auto"></div>`;
+  const renderList = (filter = "") => {
+    const f = filter.trim().toLowerCase();
+    const matches = all.filter(q => !f || (q.name || "").toLowerCase().includes(f));
+    el("editTabQList").innerHTML = matches.map(q => `
+      <label class="queue-picker-item">
+        <input type="checkbox" data-qid="${escape(q.id)}" ${members.has(q.id) ? "checked" : ""}/>
+        ${escape(q.name)}
+      </label>`).join("");
+    el("editTabQList").querySelectorAll("input[data-qid]").forEach(cb => cb.onchange = () => {
+      if (cb.checked) members.add(cb.dataset.qid); else members.delete(cb.dataset.qid);
+      tab.queueIds = [...members];
+      refreshDerivedQueueState(); saveQueueTabs();
+      refreshSubscriptions().catch(() => {});
+      if (cb.checked) seedQueueCalls(cb.dataset.qid).catch(() => {});
+      renderAll();
+    });
+  };
+  renderList();
+  el("editTabFilter").oninput = () => renderList(el("editTabFilter").value);
+  el("editTabDone").onclick = () => renderTabGroupsSection();
 }
 
 // Columns customization
@@ -2209,7 +2416,7 @@ function openColsModal() {
 function loadSettings() {
   const defaults = { extensionId: "", emergencyQueueId: "", alertMode: "auto", supervisorOverride: false };
   try { settings = { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE.settings) || "{}") }; } catch { settings = { ...defaults }; }
-  try { const s = localStorage.getItem(STORAGE.queues); if (s) selectedQueueIds = JSON.parse(s); } catch {}
+  loadQueueTabs();
   try { const s = localStorage.getItem(STORAGE.colsMy); if (s) myCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.statsGroupState); if (s) statsGroupState = JSON.parse(s); } catch {}
@@ -2218,7 +2425,7 @@ function loadSettings() {
 }
 function saveSettings() {
   localStorage.setItem(STORAGE.settings, JSON.stringify(settings));
-  localStorage.setItem(STORAGE.queues, JSON.stringify(selectedQueueIds));
+  saveQueueTabs();
 }
 function saveCols() {
   localStorage.setItem(STORAGE.colsMy, JSON.stringify(myCols));
@@ -2329,21 +2536,25 @@ function wireRowSelection() {
       renderAll();
     }
     // Queue tab click / close — my-panel tabs use [data-my-tab], so we
-    // only match queue tabs (which carry [data-qid]).
-    const tab = e.target.closest(".tab[data-qid]");
+    // only match queue tabs (which carry [data-tab-id]).
+    const tab = e.target.closest(".tab[data-tab-id]");
     if (tab) {
       const closeBtn = e.target.closest(".close");
       if (closeBtn) {
-        const qid = closeBtn.dataset.closeQid;
-        selectedQueueIds = selectedQueueIds.filter(x => x !== qid);
-        if (activeTabQueueId === qid) activeTabQueueId = selectedQueueIds[0] || null;
-        saveSettings(); renderAll();
+        const tabId = closeBtn.dataset.closeTabId;
+        queueTabs = queueTabs.filter(x => x.id !== tabId);
+        if (activeTabId === tabId) activeTabId = queueTabs[0]?.id || null;
+        refreshDerivedQueueState();
+        saveQueueTabs(); renderAll();
         if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
         refreshSubscriptions().catch(() => {});
       } else {
-        activeTabQueueId = tab.dataset.qid;
-        if (!queueMembers.has(activeTabQueueId)) fetchQueueMembers(activeTabQueueId).then(renderAll);
-        seedQueueCalls(activeTabQueueId).catch(() => {});
+        activeTabId = tab.dataset.tabId;
+        refreshDerivedQueueState();
+        saveQueueTabs();
+        // Seed every queue in the tab + refresh members for its primary queue.
+        for (const qid of activeTabQueueIds()) seedQueueCalls(qid).catch(() => {});
+        if (activeTabQueueId && !queueMembers.has(activeTabQueueId)) fetchQueueMembers(activeTabQueueId).then(renderAll);
         refreshSubscriptions().catch(() => {});
         renderAll();
       }
@@ -2839,8 +3050,8 @@ function saveWorkspaces(map) {
 }
 function captureCurrentWorkspace() {
   return {
-    queues: [...selectedQueueIds],
-    activeTab: activeTabQueueId,
+    queueTabs: JSON.parse(JSON.stringify(queueTabs)),   // deep clone
+    activeTabId,
     myCols: [...myCols],
     queueCols: [...queueCols],
     sidebarCollapsed: el("rightCol").classList.contains("collapsed"),
@@ -2852,8 +3063,15 @@ function captureCurrentWorkspace() {
 }
 async function applyWorkspace(ws) {
   if (!ws) return;
-  selectedQueueIds = [...(ws.queues || [])];
-  activeTabQueueId = ws.activeTab || selectedQueueIds[0] || null;
+  if (Array.isArray(ws.queueTabs)) {
+    queueTabs = JSON.parse(JSON.stringify(ws.queueTabs));
+    activeTabId = ws.activeTabId || queueTabs[0]?.id || null;
+  } else if (Array.isArray(ws.queues)) {
+    // Legacy workspace format
+    queueTabs = ws.queues.map(qid => ({ id: newTabId(), name: "", queueIds: [qid], divisionId: null }));
+    activeTabId = queueTabs[0]?.id || null;
+  }
+  refreshDerivedQueueState();
   if (ws.myCols) myCols = [...ws.myCols];
   if (ws.queueCols) queueCols = [...ws.queueCols];
   if (ws.sidebarCollapsed) { el("rightCol").classList.add("collapsed"); el("checkSidebar").textContent = ""; }
@@ -3122,12 +3340,14 @@ async function init() {
     fetchMyRoles().then(() => applyRoleVisibility());
     pingExtension();
     // Fetch all queue names up front so tabs render names (not ids) on first paint.
-    fetchAllQueues().then(renderAll).catch((e) => console.warn("fetchAllQueues", e));
+    fetchAllQueues().then(() => { renderAll(); renderTabGroupsSection(); }).catch((e) => console.warn("fetchAllQueues", e));
+    fetchAllDivisions().catch(() => {});
     await seedMyInteractions();
-    if (!activeTabQueueId && selectedQueueIds.length > 0) activeTabQueueId = selectedQueueIds[0];
+    refreshDerivedQueueState();
+    if (!activeTabId && queueTabs.length > 0) { activeTabId = queueTabs[0].id; refreshDerivedQueueState(); }
     await ensureChannel();
     await refreshSubscriptions();
-    // Seed every selected queue with current-call snapshot (WS doesn't backfill).
+    // Seed every watched queue with current-call snapshot (WS doesn't backfill).
     for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
     if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
     ensureMaxConf().catch(() => {});
