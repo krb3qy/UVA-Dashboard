@@ -354,6 +354,14 @@
         <div class="mi" data-cmd="settings">Configuration…</div>
       </div>
     </div>
+    <div class="item" data-menu="actions">Actions
+      <div class="menu-dropdown">
+        <div class="mi" data-cmd="confDialer">Conference Dialer…</div>
+        <div class="mi" data-cmd="sendSms">Send Text Message…</div>
+        <div class="sep"></div>
+        <div class="mi" data-cmd="makeCall">Make Call…</div>
+      </div>
+    </div>
     <div class="item" data-menu="window">Window
       <div class="menu-dropdown">
         <div class="mi" data-cmd="popout">Pop Out</div>
@@ -362,6 +370,9 @@
     </div>
     <div class="item" data-menu="help">Help
       <div class="menu-dropdown">
+        <div class="mi" data-cmd="helpSearch">Search Help Center…</div>
+        <div class="mi" data-cmd="helpCenter">Open Help Center</div>
+        <div class="sep"></div>
         <div class="mi" data-cmd="about">About UVA Dashboard</div>
       </div>
     </div>
@@ -473,19 +484,31 @@
   <!-- MAIN CONTENT -->
   <div id="mainContent">
     <div class="left-col" id="leftCol">
-      <!-- My Interactions -->
+      <!-- My Interactions + Call History (tabbed) -->
       <div class="panel my-panel" id="myPanel">
-        <div class="panel-head">
-          <span class="title">My Interactions</span>
-          <span class="sp"></span>
-          <span class="count" id="myCount">0</span>
+        <div class="tab-bar" id="myTabBar">
+          <div class="tab active" data-my-tab="interactions">
+            <span>My Interactions</span>
+            <span class="count" id="myCount">0</span>
+          </div>
+          <div class="tab" data-my-tab="history">
+            <span>Call History</span>
+            <span class="count" id="historyCount">0</span>
+          </div>
+          <span class="sp" style="flex:1"></span>
+          <button class="add-tab" id="historyRefresh" title="Refresh call history" style="display:none">↻</button>
         </div>
         <div class="rows-wrap">
           <table class="rows-table" id="myTable">
             <thead><tr id="myHead"></tr></thead>
             <tbody id="myBody"></tbody>
           </table>
+          <table class="rows-table" id="historyTable" style="display:none">
+            <thead><tr id="historyHead"></tr></thead>
+            <tbody id="historyBody"></tbody>
+          </table>
           <div class="empty-msg" id="myEmpty">No interactions</div>
+          <div class="empty-msg" id="historyEmpty" style="display:none">Loading…</div>
         </div>
       </div>
 
@@ -538,11 +561,14 @@
   <!-- STATUS BAR -->
   <div class="statusbar" id="statusBar">
     <span class="chunk" id="sbUser">—</span>
-    <span class="chunk"><span class="p-dot offline" id="sbPresenceDot"></span><span id="sbPresence">Offline</span></span>
+    <span class="chunk" id="sbPresenceChunk" style="cursor:pointer" title="Click to change ACD status"><span class="p-dot offline" id="sbPresenceDot"></span><span id="sbPresence">Offline</span> <span id="sbPresenceDur" style="color:var(--win-muted);margin-left:4px"></span></span>
     <span class="chunk" id="sbRouting">Routing: —</span>
     <span class="chunk" id="sbStation">Station: —</span>
+    <span class="chunk" id="sbNote" style="cursor:pointer" title="Click to set status note">Note: —</span>
+    <span class="chunk" id="sbConfLaunch" style="cursor:pointer;color:#036" title="Launch Conference Dialer">☎ Conf Dialer</span>
     <span class="chunk" id="sbEnv">—</span>
     <span class="chunk sp"></span>
+    <span class="chunk" id="sbAlertMode" style="cursor:pointer" title="Click to cycle alert mode">Alerts: auto</span>
     <span class="chunk" id="sbConnected">Connecting…</span>
     <span class="chunk" id="sbClock">—</span>
   </div>
@@ -555,8 +581,20 @@
     <div class="body">
       <label>Monitored queues (checked queues open as tabs)</label>
       <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
-      <div id="queueList" style="max-height:40vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
-      <label style="margin-top:12px">Alert-Extension-v2 ID (WebRTC pickup bridge)</label>
+      <div id="queueList" style="max-height:30vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
+      <label style="margin-top:12px">Emergency queue (fires in-dashboard alert when calls arrive)</label>
+      <select id="emergencyQueueSel"><option value="">(none)</option></select>
+      <label style="margin-top:12px">Alert delivery</label>
+      <select id="alertModeSel">
+        <option value="auto">Auto (dashboard when extension absent)</option>
+        <option value="dashboard">Dashboard only</option>
+        <option value="extension">Extension only</option>
+        <option value="both">Both (may double-alert)</option>
+        <option value="off">Off</option>
+      </select>
+      <label style="margin-top:12px">Supervisor actions</label>
+      <label style="font-size:11px;font-weight:normal"><input type="checkbox" id="supervisorOverride" /> I am a supervisor (force-show Listen / Coach / Join)</label>
+      <label style="margin-top:12px">Alert-Extension-v2 ID (WebRTC pickup bridge + emergency alert)</label>
       <input type="text" id="extensionIdInput" placeholder="chrome://extensions → copy the ID" />
       <label style="margin-top:12px">Environment</label>
       <input type="text" id="envInput" value="usw2.pure.cloud" />
@@ -659,6 +697,66 @@
     <div class="actions">
       <button class="btn" id="colsReset">Reset</button>
       <button class="btn btn-primary" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- SEND SMS MODAL -->
+<div id="smsModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Send Text Message</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Send from (queue)</label>
+      <select id="smsFromQueue"></select>
+      <label>To (phone number)</label>
+      <input type="tel" id="smsTo" placeholder="+15555551212" />
+      <label>Message</label>
+      <textarea id="smsBody" rows="4" placeholder="Your message…"></textarea>
+      <div id="smsStatus" style="margin-top:6px;font-size:11px;color:var(--win-muted)"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="smsGo">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- WORKSPACES MODAL -->
+<div id="workspacesModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Manage Workspaces</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Saved workspaces</label>
+      <div id="workspacesList" style="max-height:30vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+        <input type="text" id="workspaceName" placeholder="Save current layout as…" style="flex:1" />
+        <button class="btn btn-sm" id="workspaceSave">Save current</button>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--win-muted)">
+        A workspace captures: selected queues, active tab, per-queue columns,
+        splitter sizes, sidebar state, stats/group expansion.
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- HELP SEARCH MODAL -->
+<div id="helpSearchModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Search Help Center</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>What are you looking for?</label>
+      <input type="text" id="helpQuery" placeholder="e.g. how to transfer a call" />
+      <div style="margin-top:6px;font-size:11px;color:var(--win-muted)">
+        Opens the Genesys Cloud help center in a new tab filtered by your query.
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="helpGo">Search</button>
     </div>
   </div>
 </div>
@@ -798,7 +896,20 @@ let activeTabQueueId = null;
 let selectedCallId = null;
 let selectedCallScope = null;      // "my" | "queue"
 let selectedDirUserId = null;
-let settings = { extensionId: "" };
+let settings = {
+  extensionId: "",
+  emergencyQueueId: "",
+  alertMode: "auto",        // auto | dashboard | extension | both | off
+  supervisorOverride: false
+};
+let activeMyTab = "interactions";     // "interactions" | "history"
+let callHistory = [];                 // rows for Call History tab
+let historyLoading = false;
+let userIsSupervisor = false;
+let extensionPresent = false;         // last known handshake result
+let alertedConvIds = new Set();       // dashboard-fired alert dedupe
+let activeAlertConvId = null;         // currently showing dashboard alert
+let statusNoteText = "";
 let ws = null;
 let wsChannelId = null;
 let wsChannelUri = null;
@@ -1116,6 +1227,8 @@ function ingestConversation(c) {
   };
   if (row.disconnected) conversations.delete(row.id);
   else conversations.set(row.id, row);
+  maybeFireEmergencyAlert(row);
+  checkEmergencyAlertStillActive();
 
   if (queueId && !queuesById.has(queueId)) resolveQueue(queueId).then(renderAll).catch(() => {});
   if (row.assignedUserId && !usersById.has(row.assignedUserId)) resolveUser(row.assignedUserId).then(renderAll).catch(() => {});
@@ -1497,6 +1610,8 @@ function renderMyPresence() {
   el("sbRouting").textContent = "Routing: " + (u.routingStatus || "—");
   el("sbStation").textContent = "Station: " + (currentUser.station || "—");
   el("sbEnv").textContent = CONFIG.environment;
+  el("sbNote").textContent = "Note: " + (statusNoteText || "—");
+  el("sbAlertMode").textContent = `Alerts: ${settings.alertMode || "auto"}`;
 }
 
 function startClock() {
@@ -1967,12 +2082,22 @@ async function openSettings() {
   openModal("settingsModal");
   el("extensionIdInput").value = settings.extensionId || "";
   el("envInput").value = CONFIG.environment;
+  el("alertModeSel").value = settings.alertMode || "auto";
+  el("supervisorOverride").checked = !!settings.supervisorOverride;
   el("queueSearch").value = "";
   const list = el("queueList");
   list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>Loading queues…</div>";
   try {
     if (queuesById.size < 3) await fetchAllQueues();
     renderQueueList("");
+    // Populate emergency-queue dropdown from monitored queues.
+    const emg = el("emergencyQueueSel");
+    emg.innerHTML = '<option value="">(none)</option>' +
+      [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+        .map(q => `<option value="${escape(q.id)}" ${q.id === settings.emergencyQueueId ? "selected" : ""}>${escape(q.name)}</option>`).join("");
+    emg.onchange = () => { settings.emergencyQueueId = emg.value; saveSettings(); };
+    el("alertModeSel").onchange = () => { settings.alertMode = el("alertModeSel").value; saveSettings(); renderMyPresence(); };
+    el("supervisorOverride").onchange = () => { settings.supervisorOverride = el("supervisorOverride").checked; saveSettings(); applyRoleVisibility(); };
   } catch (e) {
     list.innerHTML = `<div style='padding:8px;color:#c00'>Queue load failed: ${escape(e.message)}</div>`;
   }
@@ -2048,11 +2173,13 @@ function openColsModal() {
 //  Settings persistence
 // ================================================================
 function loadSettings() {
-  try { settings = { extensionId: "", ...JSON.parse(localStorage.getItem(STORAGE.settings) || "{}") }; } catch { settings = { extensionId: "" }; }
+  const defaults = { extensionId: "", emergencyQueueId: "", alertMode: "auto", supervisorOverride: false };
+  try { settings = { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE.settings) || "{}") }; } catch { settings = { ...defaults }; }
   try { const s = localStorage.getItem(STORAGE.queues); if (s) selectedQueueIds = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.colsMy); if (s) myCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.statsGroupState); if (s) statsGroupState = JSON.parse(s); } catch {}
+  try { statusNoteText = localStorage.getItem(STORAGE.statusNote) || ""; } catch { statusNoteText = ""; }
 }
 function saveSettings() {
   localStorage.setItem(STORAGE.settings, JSON.stringify(settings));
@@ -2095,6 +2222,11 @@ function wireMenuBar() {
 function handleMenuCmd(cmd) {
   switch (cmd) {
     case "makeCall": openOutboundModal(); break;
+    case "confDialer": openConfDialerModal(); break;
+    case "sendSms": openSmsModal(); break;
+    case "manageWorkspaces": openWorkspacesModal(); break;
+    case "helpSearch": openHelpSearchModal(); break;
+    case "helpCenter": openHelpCenter(); break;
     case "logout": clearAuth(); location.reload(); break;
     case "settings": openSettings(); break;
     case "toggleSidebar": toggleRightCol(); break;
@@ -2116,6 +2248,23 @@ function wireToolbar() {
     const row = selectedCallId ? conversations.get(selectedCallId) : null;
     doAction(act, row);
   }));
+}
+
+function wireMyTabBar() {
+  el("myTabBar").addEventListener("click", (e) => {
+    const tab = e.target.closest(".tab"); if (tab) switchMyTab(tab.dataset.myTab);
+    if (e.target.id === "historyRefresh") fetchCallHistory();
+  });
+}
+
+function wireStatusBar() {
+  el("sbPresenceChunk").addEventListener("click", (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    openAcdStatusMenu(rect.left, rect.top - 200);
+  });
+  el("sbNote").addEventListener("click", openStatusNoteEditor);
+  el("sbConfLaunch").addEventListener("click", openConfDialerModal);
+  el("sbAlertMode").addEventListener("click", toggleAlertMode);
 }
 
 function toggleRightCol() {
@@ -2463,6 +2612,414 @@ function wireSplitters() {
   }
 }
 
+// ================================================================
+//  CALL HISTORY TAB
+// ================================================================
+// Analytics query schema verified against SDK build/gc/models/conversationquery.go:
+// fields: conversationFilters, segmentFilters, order, orderBy, interval, paging.
+// We filter at segment level on userId so we only see conversations this user
+// actually participated in (not every queue call they had visibility into).
+async function fetchCallHistory() {
+  if (!currentUser?.id) return;
+  historyLoading = true;
+  renderHistory();
+  try {
+    const now = new Date();
+    const past = new Date(now.getTime() - 14 * 24 * 3600 * 1000);
+    const body = {
+      interval: `${past.toISOString()}/${now.toISOString()}`,
+      order: "desc",
+      orderBy: "conversationStart",
+      segmentFilters: [{
+        type: "and",
+        predicates: [{ type: "dimension", dimension: "userId", operator: "matches", value: currentUser.id }]
+      }],
+      paging: { pageSize: 100, pageNumber: 1 }
+    };
+    const r = await apiFetch("/api/v2/analytics/conversations/details/query", { method: "POST", body });
+    callHistory = (r?.conversations || []).map(flattenHistoryRow).filter(Boolean);
+  } catch (e) {
+    console.warn("history fetch failed", e);
+    showBanner({ type: "warn", title: "Call history fetch failed", message: e.message, autoHideMs: 5000 });
+    callHistory = [];
+  } finally {
+    historyLoading = false;
+    renderHistory();
+  }
+}
+
+function flattenHistoryRow(c) {
+  const segments = c.participants?.flatMap(p => (p.sessions || []).flatMap(s => s.segments || [])) || [];
+  const mySeg = c.participants?.find(p => p.userId === currentUser?.id);
+  const customer = c.participants?.find(p => p.purpose === "customer" || p.purpose === "external");
+  const wrapup = mySeg?.sessions?.flatMap(s => s.segments || []).find(s => s.wrapUpCode)?.wrapUpCode || "";
+  const start = c.conversationStart ? new Date(c.conversationStart).getTime() : 0;
+  const end = c.conversationEnd ? new Date(c.conversationEnd).getTime() : start;
+  return {
+    id: c.conversationId,
+    name: customer?.participantName || mySeg?.participantName || "",
+    number: customer?.sessions?.[0]?.ani || customer?.sessions?.[0]?.dnis || "",
+    start, end,
+    duration: end - start,
+    wrapup,
+    direction: mySeg?.sessions?.[0]?.direction || ""
+  };
+}
+
+function renderHistory() {
+  const head = el("historyHead");
+  const body = el("historyBody");
+  const empty = el("historyEmpty");
+  const count = el("historyCount");
+  head.innerHTML = `
+    <th style="width:28px" class="icon-col"></th>
+    <th style="width:200px">Name</th>
+    <th style="width:140px">Number</th>
+    <th style="width:100px">Direction</th>
+    <th style="width:150px">Started</th>
+    <th style="width:80px">Duration</th>
+    <th style="width:120px">Wrap-up</th>
+    <th style="width:240px">Conversation Id</th>`;
+  count.textContent = callHistory.length;
+  if (historyLoading) { empty.textContent = "Loading…"; empty.style.display = "block"; body.innerHTML = ""; return; }
+  if (callHistory.length === 0) { empty.textContent = "No history in the last 14 days"; empty.style.display = "block"; body.innerHTML = ""; return; }
+  empty.style.display = "none";
+  body.innerHTML = callHistory.map(h => `
+    <tr class="row" data-hid="${escape(h.id)}">
+      <td class="icon-col">${h.direction === "outbound" ? "↗" : "↙"}</td>
+      <td>${escape(h.name || "—")}</td>
+      <td>${escape(h.number || "")}</td>
+      <td>${escape(h.direction || "")}</td>
+      <td>${new Date(h.start).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+      <td>${humanDuration(h.duration)}</td>
+      <td>${escape(h.wrapup || "")}</td>
+      <td>${escape(h.id)}</td>
+    </tr>`).join("");
+}
+
+function switchMyTab(tab) {
+  activeMyTab = tab;
+  document.querySelectorAll("#myTabBar .tab").forEach(t => t.classList.toggle("active", t.dataset.myTab === tab));
+  const showHist = tab === "history";
+  el("myTable").style.display = showHist ? "none" : "";
+  el("historyTable").style.display = showHist ? "" : "none";
+  el("myEmpty").style.display = showHist ? "none" : (conversations.size === 0 ? "block" : "none");
+  el("historyEmpty").style.display = showHist ? (callHistory.length === 0 ? "block" : "none") : "none";
+  el("historyRefresh").style.display = showHist ? "" : "none";
+  if (showHist && callHistory.length === 0 && !historyLoading) fetchCallHistory();
+}
+
+// ================================================================
+//  ROLE GATE — hide Listen / Coach / Join unless supervisor
+// ================================================================
+async function fetchMyRoles() {
+  if (!currentUser?.id) return;
+  try {
+    const r = await apiFetch(`/api/v2/users/${currentUser.id}/roles`);
+    const roleList = r?.roles || r?.entities || (Array.isArray(r) ? r : []);
+    userIsSupervisor = roleList.some(role => {
+      const n = (role.name || "").toLowerCase();
+      return n.includes("supervisor") || n.includes("admin") || n.includes("manager");
+    });
+  } catch (e) {
+    console.warn("role fetch failed", e);
+    userIsSupervisor = false;
+  }
+  applyRoleVisibility();
+}
+
+function applyRoleVisibility() {
+  const show = userIsSupervisor || settings.supervisorOverride;
+  for (const act of ["listen", "coach", "barge"]) {
+    const b = document.querySelector(`.tbtn[data-act="${act}"]`);
+    if (b) b.style.display = show ? "" : "none";
+  }
+}
+
+// ================================================================
+//  SMS — Send Text Message
+// ================================================================
+function openSmsModal() {
+  openModal("smsModal");
+  const qsel = el("smsFromQueue");
+  qsel.innerHTML = [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+    .map(q => `<option value="${escape(q.id)}">${escape(q.name)}</option>`).join("");
+  el("smsTo").value = "";
+  el("smsBody").value = "";
+  el("smsStatus").textContent = "";
+  el("smsGo").onclick = async () => {
+    const qid = qsel.value;
+    const to = el("smsTo").value.trim();
+    const msg = el("smsBody").value;
+    if (!qid || !to || !msg) { el("smsStatus").textContent = "All fields required."; return; }
+    try {
+      // POST /api/v2/conversations/messages verified in docs/conversations.json
+      const body = {
+        fromAddress: qid,                 // queue id (outbound SMS from queue)
+        toAddress: to,
+        toAddressMessengerType: "sms",
+        textBody: msg
+      };
+      await apiFetch("/api/v2/conversations/messages", { method: "POST", body });
+      el("smsStatus").textContent = "Sent.";
+      setTimeout(() => closeModal("smsModal"), 800);
+    } catch (e) {
+      el("smsStatus").textContent = "Send failed: " + e.message;
+    }
+  };
+}
+
+// ================================================================
+//  WORKSPACES — saved layouts
+// ================================================================
+function loadWorkspaces() {
+  try { return JSON.parse(localStorage.getItem(STORAGE.workspaces) || "{}"); } catch { return {}; }
+}
+function saveWorkspaces(map) {
+  try { localStorage.setItem(STORAGE.workspaces, JSON.stringify(map)); } catch {}
+}
+function captureCurrentWorkspace() {
+  return {
+    queues: [...selectedQueueIds],
+    activeTab: activeTabQueueId,
+    myCols: [...myCols],
+    queueCols: [...queueCols],
+    sidebarCollapsed: el("rightCol").classList.contains("collapsed"),
+    myPanelPx: Number(localStorage.getItem("gc_uvad_myPanelPx")) || null,
+    rightColPx: Number(localStorage.getItem("gc_uvad_rightColPx")) || null,
+    statsGroupState: { ...statsGroupState },
+    capturedAt: Date.now()
+  };
+}
+async function applyWorkspace(ws) {
+  if (!ws) return;
+  selectedQueueIds = [...(ws.queues || [])];
+  activeTabQueueId = ws.activeTab || selectedQueueIds[0] || null;
+  if (ws.myCols) myCols = [...ws.myCols];
+  if (ws.queueCols) queueCols = [...ws.queueCols];
+  if (ws.sidebarCollapsed) { el("rightCol").classList.add("collapsed"); el("checkSidebar").textContent = ""; }
+  else { el("rightCol").classList.remove("collapsed"); el("checkSidebar").textContent = "✓"; }
+  if (ws.myPanelPx) { el("myPanel").style.flex = `0 0 ${ws.myPanelPx}px`; localStorage.setItem("gc_uvad_myPanelPx", String(ws.myPanelPx)); }
+  if (ws.rightColPx) { el("rightCol").style.flex = `0 0 ${ws.rightColPx}px`; localStorage.setItem("gc_uvad_rightColPx", String(ws.rightColPx)); }
+  if (ws.statsGroupState) statsGroupState = { ...ws.statsGroupState };
+  saveSettings(); saveCols();
+  try { localStorage.setItem(STORAGE.statsGroupState, JSON.stringify(statsGroupState)); } catch {}
+  renderAll();
+  try { await refreshSubscriptions(); } catch {}
+  for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
+  if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+}
+function openWorkspacesModal() {
+  openModal("workspacesModal");
+  const renderList = () => {
+    const wsMap = loadWorkspaces();
+    const names = Object.keys(wsMap).sort();
+    const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
+    el("workspacesList").innerHTML = names.length === 0
+      ? '<div class="empty-msg" style="padding:8px">No saved workspaces</div>'
+      : names.map(n => `
+        <div class="queue-picker-item" style="cursor:default">
+          <strong style="flex:1">${escape(n)}${n === active ? " (active)" : ""}</strong>
+          <button class="btn btn-sm" data-ws-load="${escape(n)}">Load</button>
+          <button class="btn btn-sm" data-ws-del="${escape(n)}">Delete</button>
+        </div>`).join("");
+    el("workspacesList").querySelectorAll("[data-ws-load]").forEach(b => b.onclick = async () => {
+      await applyWorkspace(wsMap[b.dataset.wsLoad]);
+      localStorage.setItem(STORAGE.activeWorkspace, b.dataset.wsLoad);
+      renderList(); renderWorkspacesMenu();
+    });
+    el("workspacesList").querySelectorAll("[data-ws-del]").forEach(b => b.onclick = () => {
+      const m = loadWorkspaces(); delete m[b.dataset.wsDel]; saveWorkspaces(m); renderList(); renderWorkspacesMenu();
+    });
+  };
+  renderList();
+  el("workspaceSave").onclick = () => {
+    const n = el("workspaceName").value.trim();
+    if (!n) return;
+    const m = loadWorkspaces();
+    m[n] = captureCurrentWorkspace();
+    saveWorkspaces(m);
+    localStorage.setItem(STORAGE.activeWorkspace, n);
+    el("workspaceName").value = "";
+    renderList(); renderWorkspacesMenu();
+  };
+}
+function renderWorkspacesMenu() {
+  const menu = document.querySelector('.menu-bar .item[data-menu="workspaces"] .menu-dropdown');
+  if (!menu) return;
+  const wsMap = loadWorkspaces();
+  const names = Object.keys(wsMap).sort();
+  const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
+  menu.innerHTML = names.length === 0
+    ? '<div class="mi disabled">(no workspaces)</div>'
+    : names.map(n => `<div class="mi" data-cmd="loadWorkspace" data-ws="${escape(n)}"><span class="check">${n === active ? "✓" : ""}</span>${escape(n)}</div>`).join("");
+  menu.innerHTML += '<div class="sep"></div><div class="mi" data-cmd="manageWorkspaces">Manage Workspaces…</div>';
+  menu.querySelectorAll(".mi[data-cmd]").forEach(mi => mi.onclick = (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".menu-bar .item").forEach(x => x.classList.remove("open"));
+    if (mi.dataset.cmd === "manageWorkspaces") openWorkspacesModal();
+    else if (mi.dataset.cmd === "loadWorkspace") {
+      applyWorkspace(wsMap[mi.dataset.ws]);
+      localStorage.setItem(STORAGE.activeWorkspace, mi.dataset.ws);
+      renderWorkspacesMenu();
+    }
+  });
+}
+
+// ================================================================
+//  HELP CENTER SEARCH
+// ================================================================
+function openHelpSearchModal() {
+  openModal("helpSearchModal");
+  el("helpQuery").value = "";
+  el("helpQuery").focus();
+  el("helpGo").onclick = () => {
+    const q = el("helpQuery").value.trim();
+    const u = q ? `https://help.mypurecloud.com/?s=${encodeURIComponent(q)}` : "https://help.mypurecloud.com/";
+    window.open(u, "_blank", "noopener");
+    closeModal("helpSearchModal");
+  };
+}
+function openHelpCenter() { window.open("https://help.mypurecloud.com/", "_blank", "noopener"); }
+
+// ================================================================
+//  EMERGENCY QUEUE ALERT (dashboard-internal, works in desktop-app)
+// ================================================================
+// Three components:
+// 1. Dashboard-internal alert fires when a new call enters the emergency queue
+//    — modal banner + optional audio, auto-clears when call leaves the queue.
+// 2. Extension handshake via chrome.runtime.sendMessage ping to avoid double-fire.
+// 3. User-selectable mode in Settings: auto / dashboard / extension / both / off.
+function shouldDashboardAlert() {
+  const mode = settings.alertMode || "auto";
+  if (mode === "off") return false;
+  if (mode === "dashboard" || mode === "both") return true;
+  if (mode === "extension") return false;
+  // "auto": fall back to dashboard iff extension absent/unreachable
+  return !extensionPresent;
+}
+
+function maybeFireEmergencyAlert(row) {
+  if (!settings.emergencyQueueId) return;
+  if (row.queueId !== settings.emergencyQueueId) return;
+  if (row.disconnected || row.hasMe || !["offering", "alerting", "connected"].includes(row.stateKey)) return;
+  if (alertedConvIds.has(row.id)) return;
+  alertedConvIds.add(row.id);
+  if (!shouldDashboardAlert()) return;
+  showEmergencyAlert(row);
+}
+
+function showEmergencyAlert(row) {
+  activeAlertConvId = row.id;
+  let host = el("emergencyAlertHost");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "emergencyAlertHost";
+    host.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:900;display:flex;align-items:center;justify-content:center;padding:10px 16px;background:#c00000;color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 10px rgba(0,0,0,.35);gap:16px;animation:emFlash 1s steps(2) infinite";
+    const style = document.createElement("style");
+    style.textContent = "@keyframes emFlash { 50% { background:#ff2020; } }";
+    document.head.appendChild(style);
+    document.body.appendChild(host);
+  }
+  host.innerHTML = `
+    <span>🚨 EMERGENCY QUEUE CALL</span>
+    <span style="font-weight:400">${escape(row.name || row.number || row.id)}</span>
+    <button class="btn" id="emPickup" style="color:#000">Pick Up</button>
+    <button class="btn" id="emDismiss" style="color:#000">Dismiss</button>`;
+  host.style.display = "flex";
+  el("emPickup").onclick = async () => { try { await doAction("pickup", conversations.get(row.id)); } catch {} dismissEmergencyAlert(); };
+  el("emDismiss").onclick = dismissEmergencyAlert;
+  try { playAlertSound(); } catch {}
+}
+
+let alertAudioCtx = null;
+function playAlertSound() {
+  if (!alertAudioCtx) alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const ctx = alertAudioCtx;
+  const start = ctx.currentTime;
+  // Three short beeps.
+  for (let i = 0; i < 3; i++) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.value = 0.15;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start + i * 0.35);
+    osc.stop(start + i * 0.35 + 0.22);
+  }
+}
+
+function dismissEmergencyAlert() {
+  activeAlertConvId = null;
+  const host = el("emergencyAlertHost");
+  if (host) host.style.display = "none";
+}
+
+function checkEmergencyAlertStillActive() {
+  if (!activeAlertConvId) return;
+  const r = conversations.get(activeAlertConvId);
+  if (!r || r.disconnected || r.hasMe) dismissEmergencyAlert();
+}
+
+async function pingExtension() {
+  if (!settings.extensionId) { extensionPresent = false; return; }
+  try {
+    const result = await new Promise((resolve) => {
+      let done = false;
+      setTimeout(() => { if (!done) resolve(false); }, 1200);
+      try {
+        chrome?.runtime?.sendMessage(settings.extensionId, { action: "ping" }, (response) => {
+          done = true;
+          resolve(!!response);
+        });
+      } catch { done = true; resolve(false); }
+    });
+    extensionPresent = !!result;
+  } catch { extensionPresent = false; }
+}
+
+function toggleAlertMode() {
+  const cycle = ["auto", "dashboard", "extension", "both", "off"];
+  const i = cycle.indexOf(settings.alertMode || "auto");
+  settings.alertMode = cycle[(i + 1) % cycle.length];
+  saveSettings();
+  showBanner({ type: "info", title: "Alert mode", message: `Now: ${settings.alertMode}`, autoHideMs: 2000 });
+}
+
+// ================================================================
+//  Status bar: ACD status dropdown + status note
+// ================================================================
+async function openAcdStatusMenu(x, y) {
+  try {
+    const r = await apiFetch("/api/v2/presencedefinitions?pageSize=100");
+    const defs = r?.entities || [];
+    const menu = el("ctxMenu");
+    menu.innerHTML = defs.map(d => {
+      const label = d.languageLabels?.en_US || d.systemPresence || d.id;
+      return `<div class="item" data-presence-id="${escape(d.id)}">${escape(label)}</div>`;
+    }).join("");
+    menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+    menu.querySelectorAll("[data-presence-id]").forEach(n => n.onclick = async () => {
+      menu.classList.remove("active");
+      try {
+        await apiFetch(`/api/v2/users/${currentUser.id}/presences/PURECLOUD`, {
+          method: "PATCH",
+          body: { presenceDefinition: { id: n.dataset.presenceId } }
+        });
+      } catch (e) { showBanner({ type: "error", title: "Presence change failed", message: e.message, autoHideMs: 4000 }); }
+    });
+  } catch (e) { showBanner({ type: "warn", title: "Presence list failed", message: e.message, autoHideMs: 4000 }); }
+}
+
+function openStatusNoteEditor() {
+  const cur = statusNoteText;
+  const val = prompt("Status note (shown in your profile)", cur || "");
+  if (val === null) return;
+  statusNoteText = val.trim();
+  localStorage.setItem(STORAGE.statusNote, statusNoteText);
+  el("sbNote").textContent = statusNoteText ? `Note: ${statusNoteText}` : "Note: —";
+}
+
 async function init() {
   if (el("app-root").style.display !== "flex") return;
 
@@ -2472,10 +3029,13 @@ async function init() {
 
   wireMenuBar();
   wireToolbar();
+  wireMyTabBar();
+  wireStatusBar();
   wireRowSelection();
   wireDragDrop();
   wireSplitters();
   startClock();
+  renderWorkspacesMenu();
 
   if (localStorage.getItem(STORAGE.sidebarCollapsed) === "1") {
     el("rightCol").classList.add("collapsed");
@@ -2497,6 +3057,8 @@ async function init() {
 
     setStatus("Loading queues…");
     await fetchCurrentUser();
+    fetchMyRoles().then(() => applyRoleVisibility());
+    pingExtension();
     // Fetch all queue names up front so tabs render names (not ids) on first paint.
     fetchAllQueues().then(renderAll).catch((e) => console.warn("fetchAllQueues", e));
     await seedMyInteractions();
