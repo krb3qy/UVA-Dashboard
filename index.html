@@ -689,9 +689,13 @@
   <div class="modal">
     <div class="titlebar"><span>Customize Columns</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
+      <div style="font-size:11px;color:var(--win-muted);margin-bottom:6px">
+        Edits default columns. To override for a single queue tab, right-click
+        that queue's column headers.
+      </div>
       <label>My Interactions columns</label>
       <div id="colsMyList" style="max-height:28vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-      <label style="margin-top:12px">Queue columns</label>
+      <label style="margin-top:12px">Queue columns (default — per-queue overrides apply separately)</label>
       <div id="colsQueueList" style="max-height:28vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
     </div>
     <div class="actions">
@@ -951,6 +955,31 @@ const DEFAULT_MY_COLS = ["stateIcon", "recIcon", "state", "name", "number", "dur
 const DEFAULT_QUEUE_COLS = ["stateIcon", "recIcon", "listenIcon", "state", "name", "number", "duration", "queue", "assigned", "waitReason", "interactionId"];
 let myCols = [...DEFAULT_MY_COLS];
 let queueCols = [...DEFAULT_QUEUE_COLS];
+// Per-queue column overrides: queueId → array. Defaults to global queueCols.
+const queueColsByQueue = new Map();
+function getQueueCols(qid) {
+  if (!qid) return queueCols;
+  return queueColsByQueue.get(qid) || queueCols;
+}
+function setQueueCols(qid, cols) {
+  if (!qid) { queueCols = cols; saveCols(); return; }
+  queueColsByQueue.set(qid, cols);
+  try { localStorage.setItem(`${STORAGE.colsQueue}:${qid}`, JSON.stringify(cols)); } catch {}
+}
+function resetQueueCols(qid) {
+  if (!qid) { queueCols = [...DEFAULT_QUEUE_COLS]; saveCols(); return; }
+  queueColsByQueue.delete(qid);
+  try { localStorage.removeItem(`${STORAGE.colsQueue}:${qid}`); } catch {}
+}
+function loadPerQueueCols() {
+  // Called after selectedQueueIds is loaded so we only pre-warm active ones.
+  for (const qid of selectedQueueIds) {
+    try {
+      const raw = localStorage.getItem(`${STORAGE.colsQueue}:${qid}`);
+      if (raw) queueColsByQueue.set(qid, JSON.parse(raw));
+    } catch {}
+  }
+}
 
 function rowStateIcon(r) {
   const k = r.stateKey;
@@ -1387,14 +1416,15 @@ function renderHeaders() {
     const c = COLUMNS[k]; if (!c) return "";
     return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="my">${escape(c.label)}</th>`;
   }).join("");
-  el("queueHead").innerHTML = queueCols.map(k => {
+  const activeCols = getQueueCols(activeTabQueueId);
+  el("queueHead").innerHTML = activeCols.map(k => {
     const c = COLUMNS[k]; if (!c) return "";
     return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="queue">${escape(c.label)}</th>`;
   }).join("");
 }
 
 function renderRow(r, scope) {
-  const cols = scope === "my" ? myCols : queueCols;
+  const cols = scope === "my" ? myCols : getQueueCols(activeTabQueueId);
   const sel = (selectedCallId === r.id && selectedCallScope === scope) ? " selected" : "";
   const cells = cols.map(k => {
     const c = COLUMNS[k]; if (!c) return "";
@@ -2125,7 +2155,14 @@ function renderQueueList(filter) {
   list.querySelectorAll("input[type=checkbox]").forEach(cb => {
     cb.addEventListener("change", async () => {
       const qid = cb.dataset.qid;
-      if (cb.checked) { if (!selectedQueueIds.includes(qid)) selectedQueueIds.push(qid); }
+      if (cb.checked) {
+        if (!selectedQueueIds.includes(qid)) selectedQueueIds.push(qid);
+        // Warm per-queue column config from localStorage if present.
+        try {
+          const raw = localStorage.getItem(`${STORAGE.colsQueue}:${qid}`);
+          if (raw) queueColsByQueue.set(qid, JSON.parse(raw));
+        } catch {}
+      }
       else {
         selectedQueueIds = selectedQueueIds.filter(x => x !== qid);
         // Purge rows that belonged only to the unselected queue
@@ -2180,6 +2217,7 @@ function loadSettings() {
   try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.statsGroupState); if (s) statsGroupState = JSON.parse(s); } catch {}
   try { statusNoteText = localStorage.getItem(STORAGE.statusNote) || ""; } catch { statusNoteText = ""; }
+  loadPerQueueCols();
 }
 function saveSettings() {
   localStorage.setItem(STORAGE.settings, JSON.stringify(settings));
@@ -2378,24 +2416,35 @@ function showRowContextMenu(x, y) {
 
 function showColumnHeaderMenu(x, y, scope) {
   const menu = el("colHeaderCtx");
-  const list = scope === "my" ? myCols : queueCols;
-  const setter = scope === "my" ? (v) => myCols = v : (v) => queueCols = v;
-  menu.innerHTML = Object.entries(COLUMNS).map(([k, c]) => {
-    const on = list.includes(k);
-    return `<div class="item" data-colkey="${k}"><span class="check">${on ? "✓" : ""}</span>${escape(c.label || k)}</div>`;
-  }).join("") + `<div class="sep"></div><div class="item" data-colkey="__reset">Reset to defaults</div>`;
+  // For queue scope, operate on the active queue's cols (per-queue override).
+  const list = scope === "my" ? myCols : getQueueCols(activeTabQueueId);
+  const applyChange = (next) => {
+    if (scope === "my") { myCols = next; saveCols(); }
+    else setQueueCols(activeTabQueueId, next);
+  };
+  const resetToDefaults = () => {
+    if (scope === "my") { myCols = [...DEFAULT_MY_COLS]; saveCols(); }
+    else resetQueueCols(activeTabQueueId);
+  };
+  const scopeLabel = scope === "my" ? "My Interactions"
+    : activeTabQueueId ? (queuesById.get(activeTabQueueId)?.name || activeTabQueueId) : "Queue";
+  menu.innerHTML = `<div class="item disabled" style="font-weight:600">${escape(scopeLabel)}</div><div class="sep"></div>` +
+    Object.entries(COLUMNS).map(([k, c]) => {
+      const on = list.includes(k);
+      return `<div class="item" data-colkey="${k}"><span class="check">${on ? "✓" : ""}</span>${escape(c.label || k)}</div>`;
+    }).join("") + `<div class="sep"></div><div class="item" data-colkey="__reset">Reset to defaults</div>`;
   menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
   menu.querySelectorAll(".item[data-colkey]").forEach(n => n.addEventListener("click", () => {
     const k = n.dataset.colkey;
     if (k === "__reset") {
-      setter(scope === "my" ? [...DEFAULT_MY_COLS] : [...DEFAULT_QUEUE_COLS]);
+      resetToDefaults();
     } else {
       const cur = [...list];
       const i = cur.indexOf(k);
       if (i >= 0) cur.splice(i, 1); else cur.push(k);
-      setter(cur);
+      applyChange(cur);
     }
-    saveCols(); renderAll();
+    renderAll();
     menu.classList.remove("active");
   }));
 }
@@ -2911,6 +2960,9 @@ function maybeFireEmergencyAlert(row) {
 
 function showEmergencyAlert(row) {
   activeAlertConvId = row.id;
+  // Ask the extension (if installed) to suppress its own alert for this
+  // conversation so we don't double-alert.
+  if (extensionPresent) sendToExtension({ action: "suppressAlert", convId: row.id });
   let host = el("emergencyAlertHost");
   if (!host) {
     host = document.createElement("div");
