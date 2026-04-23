@@ -1135,30 +1135,59 @@ function randomString(length = 64) {
 async function sha256(input) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)); }
 async function createPkceChallenge(v) { return base64UrlEncode(await sha256(v)); }
 
+// Token lives in localStorage (matches Reporting-Dashboard-App pattern):
+// persists across popouts, tab closes, and page reloads. sessionStorage
+// was clearing the token on every reload so the app was redirecting
+// constantly during normal use.
+function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function safeSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+function safeRemove(k) { try { localStorage.removeItem(k); } catch {} }
+
 function saveToken(tj) {
-  sessionStorage.setItem(STORAGE.token, tj.access_token);
-  sessionStorage.setItem(STORAGE.tokenExpiresAt, String(Date.now() + (Number(tj.expires_in || 0) * 1000)));
+  safeSet(STORAGE.token, tj.access_token);
+  safeSet(STORAGE.tokenExpiresAt, String(Date.now() + (Number(tj.expires_in || 0) * 1000)));
 }
 function clearAuth() {
-  sessionStorage.removeItem(STORAGE.token);
-  sessionStorage.removeItem(STORAGE.tokenExpiresAt);
-  sessionStorage.removeItem(STORAGE.pkceVerifier);
-  sessionStorage.removeItem(STORAGE.oauthState);
+  safeRemove(STORAGE.token);
+  safeRemove(STORAGE.tokenExpiresAt);
+  safeRemove(STORAGE.pkceVerifier);
+  safeRemove(STORAGE.oauthState);
 }
 function getToken() {
-  const tok = sessionStorage.getItem(STORAGE.token);
-  const exp = Number(sessionStorage.getItem(STORAGE.tokenExpiresAt) || "0");
+  const tok = safeGet(STORAGE.token);
+  const exp = Number(safeGet(STORAGE.tokenExpiresAt) || "0");
   if (!tok) return null;
   if (Date.now() > (exp - 30000)) return null;
   return tok;
 }
 
+// Pull token out of the URL hash on load — implicit-flow callback.
+// If GC's OAuth client is set up as TOKEN grant, the authorize endpoint
+// returns directly to redirect_uri with #access_token=... on hash.
+// This is the pattern Reporting-Dashboard-App uses.
+function tryConsumeImplicitHash() {
+  const hash = window.location.hash;
+  if (!hash || !hash.includes("access_token")) return false;
+  const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+  const token = params.get("access_token");
+  if (!token) return false;
+  const expiresIn = parseInt(params.get("expires_in") || "0", 10);
+  saveToken({ access_token: token, expires_in: expiresIn || 28800 });
+  // Strip the hash so the token isn't visible in the URL bar after load.
+  window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+  return true;
+}
+
+// PKCE is the default (matches the existing OAuth client's CODE grant).
+// If the client is later updated to also allow TOKEN grant, flip the
+// response_type below to "token" for a single-hop redirect like
+// Reporting-Dashboard-App uses.
 async function startLogin() {
   const verifier = randomString(64);
   const challenge = await createPkceChallenge(verifier);
   const state = randomString(24);
-  sessionStorage.setItem(STORAGE.pkceVerifier, verifier);
-  sessionStorage.setItem(STORAGE.oauthState, state);
+  safeSet(STORAGE.pkceVerifier, verifier);
+  safeSet(STORAGE.oauthState, state);
   const u = new URL(`${loginBase()}/oauth/authorize`);
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CONFIG.clientId);
@@ -1171,8 +1200,8 @@ async function startLogin() {
 }
 
 async function exchangeCodeForToken(code) {
-  const verifier = sessionStorage.getItem(STORAGE.pkceVerifier);
-  const expectedState = sessionStorage.getItem(STORAGE.oauthState);
+  const verifier = safeGet(STORAGE.pkceVerifier);
+  const expectedState = safeGet(STORAGE.oauthState);
   const url = new URL(window.location.href);
   const state = url.searchParams.get("state");
   if (!state || !expectedState || state !== expectedState) throw new Error("Invalid OAuth state.");
@@ -1190,8 +1219,8 @@ async function exchangeCodeForToken(code) {
   saveToken(await resp.json());
   url.searchParams.delete("code"); url.searchParams.delete("state"); url.searchParams.delete("error");
   window.history.replaceState({}, document.title, url.toString());
-  sessionStorage.removeItem(STORAGE.pkceVerifier);
-  sessionStorage.removeItem(STORAGE.oauthState);
+  safeRemove(STORAGE.pkceVerifier);
+  safeRemove(STORAGE.oauthState);
 }
 
 async function redirectToGenesysLogin(reason = "") {
@@ -3160,8 +3189,10 @@ function buildPopoutUrl() {
 function triggerPopout() {
   if (isPopoutMode()) { showBanner({ type: "info", title: "Already in pop-out window", autoHideMs: 2500 }); return; }
   if (popoutWindow && !popoutWindow.closed) { popoutWindow.focus(); return; }
-  const tok = sessionStorage.getItem(STORAGE.token);
-  const exp = sessionStorage.getItem(STORAGE.tokenExpiresAt);
+  // Popout inherits the current token from main-window localStorage. The
+  // gc_uvad_popout_token keys exist for back-compat with older installs.
+  const tok = safeGet(STORAGE.token);
+  const exp = safeGet(STORAGE.tokenExpiresAt);
   if (tok) localStorage.setItem("gc_uvad_popout_token", tok);
   if (exp) localStorage.setItem("gc_uvad_popout_token_expires", exp);
   popoutWindow = window.open(buildPopoutUrl(), "uvad_popout", "width=1200,height=800,menubar=no,toolbar=no,resizable=yes,scrollbars=yes");
@@ -3181,9 +3212,9 @@ function triggerPopout() {
 function setupPopoutMode() {
   const popToken = localStorage.getItem("gc_uvad_popout_token");
   const popExp = localStorage.getItem("gc_uvad_popout_token_expires");
-  if (popToken && !sessionStorage.getItem(STORAGE.token)) {
-    sessionStorage.setItem(STORAGE.token, popToken);
-    if (popExp) sessionStorage.setItem(STORAGE.tokenExpiresAt, popExp);
+  if (popToken && !safeGet(STORAGE.token)) {
+    safeSet(STORAGE.token, popToken);
+    if (popExp) safeSet(STORAGE.tokenExpiresAt, popExp);
   }
   if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
 }
@@ -3727,6 +3758,9 @@ async function init() {
   const oauthError = url.searchParams.get("error");
   try {
     if (oauthError) throw new Error(`OAuth error: ${oauthError}`);
+    // Implicit-flow callback: token lands in the URL hash.
+    if (tryConsumeImplicitHash()) setStatus("Signed in.");
+    // PKCE callback: ?code=... in the query string.
     if (code) { setStatus("Completing sign-in…"); await exchangeCodeForToken(code); }
     if (!getToken()) { setStatus("Redirecting to sign-in…"); await startLogin(); return; }
 
