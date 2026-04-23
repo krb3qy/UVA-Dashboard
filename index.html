@@ -438,6 +438,19 @@
       <svg viewBox="0 0 16 16"><path fill="#000" d="M2 3h12v10H2V3zm1 2v7h10V5H3zm2 1h6v1H5V6zm0 2h6v1H5V8zm0 2h4v1H5v-1z"/></svg>
       Wrap-up
     </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="merge" title="Merge selected calls into conference">
+      <svg viewBox="0 0 16 16"><path fill="none" stroke="#036" stroke-width="1.5" d="M2 3v4c0 2 2 3 4 3h4c2 0 4 1 4 3v0M2 13v-4c0-2 2-3 4-3h4c2 0 4-1 4-3v0"/></svg>
+      Merge
+    </button>
+    <button class="tbtn" data-act="addParty" title="Add number to current call / conference">
+      <svg viewBox="0 0 16 16"><path fill="#060" d="M10 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM4 9h12v2H4V9zm-3 0v2H0V9h1zm12-2v2h-1V7h1z"/><path fill="#060" d="M3 12h2v4H3v-4zm-2 2v-1H0v-1h1v-1h1v1h1v1H2v1H1z"/></svg>
+      Add Party
+    </button>
+    <button class="tbtn" data-act="confDialer" title="Conference Dialer (saved speed-dial groups)">
+      <svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2" fill="#036"/><circle cx="12" cy="4" r="2" fill="#036"/><circle cx="4" cy="12" r="2" fill="#036"/><circle cx="12" cy="12" r="2" fill="#036"/><path fill="none" stroke="#036" d="M4 4h8M4 12h8M4 4v8M12 4v8"/></svg>
+      Conf Dial
+    </button>
     <span class="sp"></span>
     <button class="tbtn" data-act="settings" title="Settings">
       <svg viewBox="0 0 16 16"><path fill="#000" d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6 3l-1.3-.3-.3-.8.7-1.2-1.2-1.2-1.2.7-.8-.3L9.5 4h-3l-.3 1.3-.8.3-1.2-.7-1.2 1.2.7 1.2-.3.8L2 8v2l1.3.3.3.8-.7 1.2 1.2 1.2 1.2-.7.8.3L6.5 14h3l.3-1.3.8-.3 1.2.7 1.2-1.2-.7-1.2.3-.8L14 9V8z"/></svg>
@@ -650,6 +663,65 @@
   </div>
 </div>
 
+<!-- CONFERENCE DIALER MODAL -->
+<div id="confDialerModal" class="modal-backdrop">
+  <div class="modal" style="min-width:520px;max-width:680px">
+    <div class="titlebar"><span>Conference Dialer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Outbound caller ID (optional — dials from queue's outbound number)</label>
+      <select id="confFromQueue"><option value="">(personal)</option></select>
+      <label style="margin-top:12px">Participants (phone numbers)</label>
+      <div id="confPartyList"></div>
+      <button class="btn btn-sm" id="confAddRow" style="margin-top:4px">+ Add number</button>
+      <label style="margin-top:14px">Saved speed-dial groups</label>
+      <div id="confGroupList" style="max-height:22vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+        <input type="text" id="confGroupName" placeholder="Save current numbers as group…" style="flex:1" />
+        <button class="btn btn-sm" id="confSaveGroup">Save</button>
+      </div>
+      <div id="confStatus" style="margin-top:10px;font-size:11px;color:var(--win-muted)"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Close</button>
+      <button class="btn btn-primary" id="confDialGo">Bridge All</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD PARTY MODAL -->
+<div id="addPartyModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Add Party to Call</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <div id="addPartyTarget" style="font-size:11px;color:var(--win-muted);margin-bottom:6px"></div>
+      <label>Phone number to bridge in</label>
+      <input type="tel" id="addPartyNumber" placeholder="+15555551212" />
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="addPartyGo">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- MERGE CONFIRMATION MODAL -->
+<div id="mergeModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Merge / Conference</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <div id="mergeSummary" style="font-size:12px;margin-bottom:8px"></div>
+      <div id="mergeList" style="max-height:30vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <label style="margin-top:10px">Include queue-held calls (assign to me first, then merge)</label>
+      <div id="mergeQueueList" style="max-height:18vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <div id="mergeStatus" style="margin-top:8px;font-size:11px;color:var(--win-muted)"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="mergeGo">Merge</button>
+    </div>
+  </div>
+</div>
+
 <!-- CONTEXT MENUS -->
 <div id="ctxMenu" class="ctx-menu"></div>
 <div id="colHeaderCtx" class="ctx-menu"></div>
@@ -695,7 +767,14 @@ const STORAGE = {
   colsMy: "gc_uvad_cols_my",
   colsQueue: "gc_uvad_cols_queue",
   sidebarCollapsed: "gc_uvad_sidebar_collapsed",
-  statsGroupState: "gc_uvad_stats_group_state"
+  statsGroupState: "gc_uvad_stats_group_state",
+  confGroups: "gc_uvad_conf_groups",
+  confLastFromQueue: "gc_uvad_conf_last_from_queue",
+  emergencyQueue: "gc_uvad_emergency_queue",
+  alertMode: "gc_uvad_alert_mode",
+  workspaces: "gc_uvad_workspaces",
+  activeWorkspace: "gc_uvad_active_workspace",
+  statusNote: "gc_uvad_status_note"
 };
 
 const loginBase = () => `https://login.${CONFIG.environment}`;
@@ -1279,6 +1358,14 @@ function renderToolbar() {
   enable("record", !!selRow && (isMine || isQueue));
   enable("pause", !!selRow && (isMine || isQueue));
   enable("wrapup", !!selRow && isMine);
+  // Merge: enabled when the user has 2+ calls of their own, or when a queue
+  // call is selected alongside at least one active "my" call (assign & merge).
+  const myCount = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).length;
+  enable("merge", myCount >= 2 || (!!selRow && (isMine || isQueue)));
+  // Add Party: enabled whenever the user has at least one active call.
+  enable("addParty", myCount >= 1 || (!!selRow && isMine));
+  // Conference Dialer: always available.
+  enable("confDialer", true);
   enable("settings", true);
   enable("popout", true);
 
@@ -1453,6 +1540,11 @@ async function doAction(act, row) {
     if (act === "transfer") { openTransferModal(row); return; }
     if (act === "consult") { openConsultModal(row); return; }
     if (act === "voicemail") { await actVoicemail(row); return; }
+    if (act === "confDialer") { openConfDialerModal(); return; }
+    if (act === "merge") { openMergeModal(row); return; }
+    if (act === "addParty") { openAddPartyModal(row); return; }
+    if (act === "sendSms") { openSmsModal(); return; }
+    if (act === "toggleEmergencyAlert") { toggleAlertMode(); return; }
     if (!row) return;
     const convId = row.id;
     const myPart = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime);
@@ -1602,10 +1694,247 @@ function openOutboundModal() {
     const num = el("outboundNumber").value.trim(); if (!num) return;
     const qid = sel.value;
     try {
-      const body = qid ? { phoneNumber: num, callFromQueueId: qid } : { phoneNumber: num };
-      await apiFetch("/api/v2/conversations/calls", { method: "POST", body });
+      await createOutboundCall(num, qid || null);
       closeModal("outboundModal");
     } catch (e) { showBanner({ type: "error", title: "Call failed", message: e.message, autoHideMs: 5000 }); }
+  };
+}
+
+// ================================================================
+//  Conference Dialer  (ported from Conference-Dialer-App)
+// ================================================================
+// Stored per-user in localStorage keyed by user id so groups follow the agent
+// across browser sessions on the same device. Profile-scoped portability
+// (across devices) would need a backing store — not scoped in this build.
+function confGroupsKey() { return `${STORAGE.confGroups}:${currentUser?.id || "anon"}`; }
+function loadConfGroups() {
+  try { return JSON.parse(localStorage.getItem(confGroupsKey()) || "[]"); }
+  catch { return []; }
+}
+function saveConfGroups(groups) {
+  try { localStorage.setItem(confGroupsKey(), JSON.stringify(groups)); } catch {}
+}
+
+let confPartyRows = ["", ""];    // working input list (strings)
+let confActive = null;            // { conversationId, legs: [{number, state}] }
+
+function openConfDialerModal() {
+  openModal("confDialerModal");
+  // Populate queue dropdown
+  const sel = el("confFromQueue");
+  const lastFromQueue = localStorage.getItem(STORAGE.confLastFromQueue) || "";
+  sel.innerHTML = '<option value="">(personal)</option>' +
+    [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      .map(q => `<option value="${escape(q.id)}" ${q.id === lastFromQueue ? "selected" : ""}>${escape(q.name)}</option>`).join("");
+  sel.onchange = () => localStorage.setItem(STORAGE.confLastFromQueue, sel.value);
+
+  if (confPartyRows.length < 2) confPartyRows = ["", ""];
+  renderConfPartyList();
+  renderConfGroupList();
+
+  el("confAddRow").onclick = () => {
+    if (confPartyRows.length >= 20) return;
+    confPartyRows.push(""); renderConfPartyList();
+  };
+  el("confSaveGroup").onclick = () => {
+    const name = el("confGroupName").value.trim();
+    if (!name) { showBanner({ type: "warn", title: "Name required", autoHideMs: 2500 }); return; }
+    const nums = confPartyRows.map(cleanPhone).filter(n => n.length >= 7);
+    if (nums.length < 2) { showBanner({ type: "warn", title: "At least 2 valid numbers required", autoHideMs: 2500 }); return; }
+    const groups = loadConfGroups();
+    groups.push({ name, numbers: nums, createdAt: Date.now() });
+    saveConfGroups(groups);
+    el("confGroupName").value = "";
+    renderConfGroupList();
+  };
+  el("confDialGo").onclick = async () => {
+    const nums = confPartyRows.map(cleanPhone).filter(n => n.length >= 7);
+    if (nums.length < 2) { setConfStatus("Need at least 2 valid numbers."); return; }
+    const fromQueue = el("confFromQueue").value || "";
+    await runConference(nums, fromQueue);
+  };
+}
+
+function cleanPhone(s) { return String(s || "").replace(/[^\d+]/g, ""); }
+function formatPhone(s) {
+  const d = cleanPhone(s).replace(/^\+?1?/, "");
+  if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+  if (d.length === 7)  return `${d.slice(0,3)}-${d.slice(3)}`;
+  return String(s || "");
+}
+
+function renderConfPartyList() {
+  const host = el("confPartyList");
+  host.innerHTML = confPartyRows.map((n, i) => `
+    <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px">
+      <span style="width:22px;color:var(--win-muted);font-size:11px">${i + 1}.</span>
+      <input type="tel" data-conf-row="${i}" value="${escape(n)}" placeholder="+15555551212" style="flex:1" />
+      ${confPartyRows.length > 2 ? `<button class="btn btn-sm" data-conf-remove="${i}">×</button>` : ""}
+    </div>`).join("");
+  host.querySelectorAll("input[data-conf-row]").forEach(inp => {
+    inp.oninput = () => { confPartyRows[Number(inp.dataset.confRow)] = inp.value; };
+  });
+  host.querySelectorAll("button[data-conf-remove]").forEach(b => {
+    b.onclick = () => {
+      const i = Number(b.dataset.confRemove);
+      confPartyRows.splice(i, 1); renderConfPartyList();
+    };
+  });
+}
+
+function renderConfGroupList() {
+  const host = el("confGroupList");
+  const groups = loadConfGroups();
+  if (groups.length === 0) {
+    host.innerHTML = '<div class="empty-msg" style="padding:8px">No saved groups</div>';
+    return;
+  }
+  host.innerHTML = groups.map((g, i) => `
+    <div class="queue-picker-item" data-g="${i}" style="cursor:pointer">
+      <span style="display:inline-block;background:#d4e0f5;border:1px solid #8aa8d8;padding:0 5px;border-radius:2px;font-size:10px;margin-right:6px">${g.numbers.length}</span>
+      <strong>${escape(g.name)}</strong>
+      <span style="flex:1;margin-left:8px;color:var(--win-muted);font-size:11px">${escape(g.numbers.slice(0, 2).map(formatPhone).join(", "))}${g.numbers.length > 2 ? ` +${g.numbers.length - 2}` : ""}</span>
+      <button class="btn btn-sm" data-g-del="${i}" title="Delete group">×</button>
+    </div>`).join("");
+  host.querySelectorAll("[data-g]").forEach(row => {
+    row.onclick = (ev) => {
+      if (ev.target.dataset.gDel !== undefined) return;
+      const i = Number(row.dataset.g);
+      const g = loadConfGroups()[i]; if (!g) return;
+      confPartyRows = [...g.numbers]; renderConfPartyList();
+      setConfStatus(`Loaded group "${g.name}" (${g.numbers.length} numbers)`);
+    };
+  });
+  host.querySelectorAll("[data-g-del]").forEach(b => {
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      const i = Number(b.dataset.gDel);
+      const groups = loadConfGroups();
+      groups.splice(i, 1); saveConfGroups(groups);
+      renderConfGroupList();
+    };
+  });
+}
+
+function setConfStatus(msg) { el("confStatus").textContent = msg || ""; }
+
+async function runConference(numbers, fromQueueId) {
+  setConfStatus(`Placing call 1/${numbers.length} to ${formatPhone(numbers[0])}…`);
+  try {
+    const first = await createOutboundCall(numbers[0], fromQueueId);
+    const convId = first?.id || first?.conversationId;
+    if (!convId) throw new Error("createCall did not return a conversation id");
+    confActive = { conversationId: convId, legs: numbers.map((n, i) => ({ number: n, state: i === 0 ? "ringing" : "pending" })) };
+    setConfStatus(`First leg ringing (${formatPhone(numbers[0])}). Adding remaining ${numbers.length - 1}…`);
+
+    // Give the first leg a moment to start ringing before cascading adds.
+    await new Promise(r => setTimeout(r, 1500));
+
+    for (let i = 1; i < numbers.length; i++) {
+      try {
+        await addParticipantToCall(convId, numbers[i]);
+        confActive.legs[i].state = "ringing";
+        setConfStatus(`Added ${i + 1}/${numbers.length} → ${formatPhone(numbers[i])}`);
+      } catch (e) {
+        confActive.legs[i].state = "failed";
+        setConfStatus(`Failed to add ${formatPhone(numbers[i])}: ${e.message}`);
+      }
+      await new Promise(r => setTimeout(r, 600));
+    }
+    setConfStatus(`All legs dispatched. Conference conversation: ${convId}`);
+  } catch (e) {
+    setConfStatus(`Conference failed: ${e.message}`);
+    showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 5000 });
+  }
+}
+
+// ================================================================
+//  Add Party (bridge a phone number into an existing call / conference)
+// ================================================================
+function openAddPartyModal(row) {
+  // Target = selected row if it's mine; otherwise first active "my" call.
+  const candidate = (row && row.hasMe) ? row : [...conversations.values()].find(r => r.hasMe && !r.disconnected);
+  if (!candidate) { showBanner({ type: "warn", title: "No active call to add a party to", autoHideMs: 3000 }); return; }
+  openModal("addPartyModal");
+  el("addPartyTarget").textContent = `Adding to: ${candidate.name || candidate.number || candidate.id}`;
+  el("addPartyNumber").value = "";
+  el("addPartyNumber").focus();
+  el("addPartyGo").onclick = async () => {
+    const num = el("addPartyNumber").value.trim();
+    if (!num) return;
+    try {
+      await addParticipantToCall(candidate.id, num);
+      closeModal("addPartyModal");
+      showBanner({ type: "info", title: "Adding party", message: `Ringing ${formatPhone(num)}…`, autoHideMs: 3000 });
+    } catch (e) {
+      showBanner({ type: "error", title: "Add party failed", message: e.message, autoHideMs: 5000 });
+    }
+  };
+}
+
+// ================================================================
+//  Merge modal — IW-Merge style: assign queue calls to self, then conference all
+// ================================================================
+function openMergeModal(row) {
+  openModal("mergeModal");
+  const mine = [...conversations.values()].filter(r => r.hasMe && !r.disconnected);
+  const queued = [...conversations.values()].filter(r => !r.hasMe && !r.disconnected && r.queueId && selectedQueueIds.includes(r.queueId));
+  const sel = new Set(mine.map(r => r.id));
+  const queuedSel = new Set();
+  if (row && row.hasMe) sel.add(row.id);
+  if (row && !row.hasMe) queuedSel.add(row.id);
+
+  const renderLists = () => {
+    el("mergeSummary").textContent = `${sel.size} of your active call(s) + ${queuedSel.size} queue call(s) will be conferenced.`;
+    el("mergeList").innerHTML = mine.length === 0
+      ? '<div class="empty-msg" style="padding:8px">No active calls of your own</div>'
+      : mine.map(r => `<label class="queue-picker-item">
+          <input type="checkbox" data-my="${escape(r.id)}" ${sel.has(r.id) ? "checked" : ""}/>
+          ${escape(r.name || r.number || r.id)}
+          <span style="color:var(--win-muted);margin-left:8px">${escape(r.stateDisplay)}</span>
+        </label>`).join("");
+    el("mergeQueueList").innerHTML = queued.length === 0
+      ? '<div class="empty-msg" style="padding:8px">No queue calls in monitored queues</div>'
+      : queued.map(r => `<label class="queue-picker-item">
+          <input type="checkbox" data-q="${escape(r.id)}" ${queuedSel.has(r.id) ? "checked" : ""}/>
+          ${escape(r.name || r.number || r.id)}
+          <span style="color:var(--win-muted);margin-left:8px">${escape(r.queueName)}</span>
+        </label>`).join("");
+    el("mergeList").querySelectorAll("input[data-my]").forEach(cb => cb.onchange = () => {
+      cb.checked ? sel.add(cb.dataset.my) : sel.delete(cb.dataset.my); renderLists();
+    });
+    el("mergeQueueList").querySelectorAll("input[data-q]").forEach(cb => cb.onchange = () => {
+      cb.checked ? queuedSel.add(cb.dataset.q) : queuedSel.delete(cb.dataset.q); renderLists();
+    });
+  };
+  renderLists();
+
+  el("mergeGo").onclick = async () => {
+    const status = el("mergeStatus");
+    try {
+      // Step 1: assign any queue calls to me
+      if (queuedSel.size > 0) {
+        status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
+        for (const qid of queuedSel) {
+          try { await assignCallToMe(qid); }
+          catch (e) { status.textContent = `Assign failed for ${qid}: ${e.message}`; }
+        }
+        // Wait for delivery
+        await new Promise(r => setTimeout(r, 2500));
+      }
+      // Step 2: collect every current "my" call id, merge them
+      const afterMine = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
+      const targetSet = new Set([...sel, ...queuedSel, ...afterMine]);
+      const ids = [...targetSet];
+      if (ids.length < 2) { status.textContent = "Not enough calls to merge."; return; }
+      status.textContent = `Merging ${ids.length} calls…`;
+      await mergeMany(ids);
+      showBanner({ type: "info", title: "Merge requested", message: `Conferenced ${ids.length} calls.`, autoHideMs: 3000 });
+      closeModal("mergeModal");
+    } catch (e) {
+      status.textContent = `Merge failed: ${e.message}`;
+      showBanner({ type: "error", title: "Merge failed", message: e.message, autoHideMs: 5000 });
+    }
   };
 }
 
@@ -1957,13 +2286,55 @@ function wireDragDrop() {
   });
 }
 
+// Correct merge: PATCH /conversations/calls/{target}/conference with {conversationIds: [others]}
+// Verified from SDK endpoint inventory + IW-Merge working implementation.
 async function mergeCalls(srcId, destId) {
   await ensureMaxConf();
   const src = conversations.get(srcId); const dest = conversations.get(destId);
   if (!src || !dest) throw new Error("Missing conversation");
-  // POST /conversations/calls with call1 + call2
-  await apiFetch("/api/v2/conversations/calls", { method: "POST", body: { callIds: [srcId, destId] } });
+  // Target is the destination row (where it was dropped); source gets merged in.
+  const target = destId;
+  const others = [srcId];
+  try {
+    await apiFetch(`/api/v2/conversations/calls/${target}/conference`, { method: "PATCH", body: { conversationIds: others } });
+  } catch (e1) {
+    // Fallback pattern used by IW-Merge when /conference sub-path 404s
+    await apiFetch(`/api/v2/conversations/calls/${target}`, { method: "PATCH", body: { conversationIds: others } });
+  }
   showBanner({ type: "info", title: "Merged", message: `Conferenced ${src.name || srcId} + ${dest.name || destId}`, autoHideMs: 3000 });
+}
+
+// Merge N calls into a conference. Target = first id, others merged in.
+async function mergeMany(convIds) {
+  if (!convIds || convIds.length < 2) throw new Error("Need at least 2 calls to merge");
+  const [target, ...others] = convIds;
+  try {
+    await apiFetch(`/api/v2/conversations/calls/${target}/conference`, { method: "PATCH", body: { conversationIds: others } });
+  } catch {
+    await apiFetch(`/api/v2/conversations/calls/${target}`, { method: "PATCH", body: { conversationIds: others } });
+  }
+  return target;
+}
+
+// Assign a queue call to the current user (IW-Merge "assign & merge" first step)
+async function assignCallToMe(convId) {
+  if (!currentUser?.id) throw new Error("No current user");
+  await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+}
+
+// Add a participant (phone number) to an existing call conversation.
+// Used for conference dialing and bridge/add-party.
+async function addParticipantToCall(convId, phoneNumber, name) {
+  const body = { address: phoneNumber };
+  if (name) body.name = name;
+  return apiFetch(`/api/v2/conversations/calls/${convId}/participants`, { method: "POST", body });
+}
+
+// Create an outbound call via the platform API. Supports callFromQueueId so
+// outbound CID presents the queue's configured number rather than the user's.
+async function createOutboundCall(phoneNumber, fromQueueId) {
+  const body = fromQueueId ? { phoneNumber, callFromQueueId: fromQueueId } : { phoneNumber };
+  return apiFetch("/api/v2/conversations/calls", { method: "POST", body });
 }
 
 // ================================================================
