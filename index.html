@@ -128,24 +128,30 @@
     .panel-head .phbtn:hover { background: var(--win-menu-hover); border-color: #8aa8d8; }
 
     /* -------- Queue tabs (below panel head) --------
-       Height is driven by content: padding + line-height + border.
-       With box-sizing: border-box (global), setting an explicit height
-       on tabs was squeezing content and clipping the text.             */
+       .panel has overflow: hidden, which means anything protruding up
+       from tab-bar gets CLIPPED by the queue-panel's top edge. The old
+       CSS had tabs exactly filling the tab-bar content area — any font
+       rendering variance pushed them over and the tops got cut off
+       (the "tabs cut in half by the panel above" bug).
+       Now: tab-bar is 42px with generous top padding; tabs have an
+       explicit 26px height that leaves ~14px content space which
+       comfortably fits the 12px/14px-line text. No margin-bottom
+       negative tricks — active tab is pure background/weight change.  */
     .tab-bar { display: flex; gap: 0; align-items: flex-end; overflow-x: auto;
       overflow-y: visible;
       border-bottom: 1px solid var(--win-border); background: var(--win-panel-head);
-      padding: 5px 4px 0 6px; flex: 0 0 34px; min-height: 34px; }
-    .tab { padding: 5px 12px 6px; background: linear-gradient(to bottom, #f0f0f0, #cfcfcf);
+      padding: 12px 4px 0 6px; flex: 0 0 42px; min-height: 42px; }
+    .tab { padding: 5px 12px; background: linear-gradient(to bottom, #f0f0f0, #cfcfcf);
       border: 1px solid var(--win-border); border-bottom: none; font-size: 12px; cursor: pointer;
       border-radius: 4px 4px 0 0; display: inline-flex; align-items: center; gap: 6px;
       white-space: nowrap; color: var(--win-text); margin-right: 2px;
-      line-height: 16px; flex: 0 0 auto; }
+      line-height: 14px; height: 26px; flex: 0 0 auto; }
     .tab:hover:not(.active) { background: linear-gradient(to bottom, #f8f8f8, #d8d8d8); }
     .tab.active { background: linear-gradient(to bottom, #ffffff, #f4f7fd); font-weight: 600;
-      padding-bottom: 7px; position: relative; z-index: 2; border-bottom: 1px solid #fff;
-      margin-bottom: -1px; }
+      border-color: var(--win-border); }
     .tab.group-tab { border-left: 3px solid #316ac5; padding-left: 10px; }
-    .add-tab { flex: 0 0 auto; align-self: center; }
+    .add-tab { flex: 0 0 auto; align-self: center; height: 26px; padding: 0 10px;
+      display: inline-flex; align-items: center; }
     .tab .close { opacity: .55; font-size: 10px; margin-left: 2px; }
     .tab .close:hover { opacity: 1; color: #c00000; }
     .tab .count { background: #d4e0f5; border: 1px solid #8aa8d8; padding: 0 4px;
