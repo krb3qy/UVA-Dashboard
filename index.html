@@ -1178,23 +1178,14 @@ function tryConsumeImplicitHash() {
   return true;
 }
 
-// PKCE is the default (matches the existing OAuth client's CODE grant).
-// If the client is later updated to also allow TOKEN grant, flip the
-// response_type below to "token" for a single-hop redirect like
-// Reporting-Dashboard-App uses.
+// Implicit flow (TOKEN grant) — single redirect, token returned in the
+// URL hash. Matches Reporting-Dashboard-App. Requires the OAuth client
+// to have authorizedGrantType = "TOKEN" in Genesys Cloud.
 async function startLogin() {
-  const verifier = randomString(64);
-  const challenge = await createPkceChallenge(verifier);
-  const state = randomString(24);
-  safeSet(STORAGE.pkceVerifier, verifier);
-  safeSet(STORAGE.oauthState, state);
   const u = new URL(`${loginBase()}/oauth/authorize`);
-  u.searchParams.set("response_type", "code");
+  u.searchParams.set("response_type", "token");
   u.searchParams.set("client_id", CONFIG.clientId);
   u.searchParams.set("redirect_uri", redirectUri());
-  u.searchParams.set("code_challenge_method", "S256");
-  u.searchParams.set("code_challenge", challenge);
-  u.searchParams.set("state", state);
   if (CONFIG.scope) u.searchParams.set("scope", CONFIG.scope);
   window.location.assign(u.toString());
 }
