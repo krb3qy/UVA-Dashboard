@@ -1456,29 +1456,41 @@ async function seedMyInteractions() {
   } catch (e) { console.warn("seedMyInteractions failed", e); }
 }
 
-// Observations-query seed (matches IW-Merge pattern — WS topics don't backfill,
-// so we pull the current snapshot of waiting/interacting calls per queue and then
-// let the WS topic keep things fresh from there.)
-async function seedQueueCalls(queueId) {
-  if (!queueId || typeof queueId !== "string") return;  // guard against undefined/null
+// Combined queue poll — one observations query per queue per cycle that
+// fetches BOTH the live call list AND the stats-panel metrics. Previously
+// seedQueueCalls and pollQueueStats hit the same endpoint back-to-back for
+// every queue, which tripped the analytics rate limit (25 req/min) fast.
+//
+// Valid QueueObservationMetric enum values (verified from API's 400 on
+// invalid names): oActiveUsers, oAlerting, oInteracting,
+// oLongestInteracting, oLongestWaiting, oMemberUsers, oOffQueueUsers,
+// oOnQueueUsers, oUserPresences, oUserRoutingStatuses, oWaiting.
+const QUEUE_OBSERVATION_METRICS = [
+  "oWaiting", "oAlerting", "oInteracting",
+  "oOnQueueUsers", "oOffQueueUsers", "oActiveUsers", "oMemberUsers",
+  "oUserRoutingStatuses", "oUserPresences",
+  "oLongestWaiting", "oLongestInteracting"
+];
+// Only call-state metrics need per-observation detail (conversation IDs).
+const QUEUE_DETAIL_METRICS = ["oWaiting", "oAlerting", "oInteracting"];
+
+async function pollQueue(queueId) {
+  if (!queueId || typeof queueId !== "string") return;
   try {
-    // Valid QueueObservationMetric enum values (verified from the API's
-    // own 400 response when invalid ones were sent):
-    //   oActiveUsers, oAlerting, oInteracting, oLongestInteracting,
-    //   oLongestWaiting, oMemberUsers, oOffQueueUsers, oOnQueueUsers,
-    //   oUserPresences, oUserRoutingStatuses, oWaiting
-    // Call-state metrics (what we need here) are the three below. Held
-    // calls are reported within oInteracting — GC doesn't expose held
-    // as a separate observation metric.
-    const QUEUE_CALL_METRICS = ["oWaiting", "oAlerting", "oInteracting"];
     const body = {
       filter: { type: "and", predicates: [
         { type: "dimension", dimension: "queueId", operator: "matches", value: queueId }
       ]},
-      metrics: QUEUE_CALL_METRICS,
-      detailMetrics: QUEUE_CALL_METRICS
+      metrics: QUEUE_OBSERVATION_METRICS,
+      detailMetrics: QUEUE_DETAIL_METRICS
     };
     const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
+
+    // 1. Update stats panel (ALL metrics in the response)
+    queueStats.set(queueId, { ...(queueStats.get(queueId) || {}), ...flattenObservationEvent(data) });
+    if (queueId === activeTabQueueId || activeTabQueueIds().includes(queueId)) renderStats();
+
+    // 2. Harvest active call conversation IDs from the detail metrics
     const seen = new Set();
     const convIds = [];
     for (const result of (data?.results || [])) {
@@ -1518,18 +1530,18 @@ async function seedQueueCalls(queueId) {
         }
       }
     }
-    // Prune stale rows: any conversation currently in our Map that's tied
-    // to this queue but NOT in the live observation snapshot is gone from
-    // the queue — disconnected, transferred out, or moved. WS "disconnect"
-    // events can be missed on reconnect; the observations query is
-    // authoritative for what's live. Never prune the user's own calls.
+    // 3. Prune stale rows: any conversation currently in our Map tied to
+    // this queue but NOT in the live observation snapshot is gone from
+    // the queue. WS "disconnect" events can be missed on reconnect; the
+    // observations query is authoritative for what's live. Never prune
+    // the user's own calls.
     for (const [id, r] of [...conversations]) {
       if (r.queueId === queueId && !r.hasMe && !seen.has(id)) {
         conversations.delete(id);
       }
     }
 
-    // Upgrade each placeholder with full participant data so actions work.
+    // 4. Upgrade placeholders with full participant data (for actions).
     // Pass the queueId as a hint — the full conversation may have lost
     // queueId from its participants once it moved past ACD.
     for (const id of convIds) {
@@ -1539,10 +1551,20 @@ async function seedQueueCalls(queueId) {
     }
     renderAll();
   } catch (e) {
-    console.warn("seedQueueCalls failed", queueId, e);
-    showBanner({ type: "warn", title: "Queue snapshot failed", message: e?.message || String(e), autoHideMs: 4000 });
+    const msg = e?.message || String(e);
+    // Rate-limited — skip this round quietly. The next poll (or the API's
+    // Retry-After window) will recover on its own. Don't spam the banner.
+    if (msg.includes("429") || msg.includes("too.many.requests")) {
+      console.warn("pollQueue 429 for", queueId, "— skipping this cycle");
+      return;
+    }
+    console.warn("pollQueue failed", queueId, e);
+    showBanner({ type: "warn", title: "Queue snapshot failed", message: msg, autoHideMs: 4000 });
   }
 }
+
+// Back-compat alias — existing callers still say seedQueueCalls.
+const seedQueueCalls = pollQueue;
 async function fetchQueueMembers(queueId) {
   try {
     const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&expand=presence,routingStatus`);
@@ -1756,46 +1778,25 @@ function flattenObservationEvent(body) {
 // endpoint — they can't be mixed into an observations query.
 // oUserPresences and oUserRoutingStatuses return breakdown arrays that
 // let us derive per-status user counts (idle / interacting / not_responding).
-const QUEUE_STATS_METRICS = [
-  "oOnQueueUsers", "oOffQueueUsers", "oActiveUsers", "oMemberUsers",
-  "oWaiting", "oAlerting", "oInteracting",
-  "oLongestWaiting", "oLongestInteracting",
-  "oUserPresences", "oUserRoutingStatuses"
-];
-async function pollQueueStats(qid) {
-  if (!qid) return;
-  try {
-    const body = {
-      filter: { type: "and", predicates: [
-        { type: "dimension", dimension: "queueId", operator: "matches", value: qid }
-      ]},
-      metrics: QUEUE_STATS_METRICS
-    };
-    const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
-    const flat = flattenObservationEvent(data);
-    const merged = { ...(queueStats.get(qid) || {}), ...flat };
-    queueStats.set(qid, merged);
-    if (qid === activeTabQueueId || activeTabQueueIds().includes(qid)) renderStats();
-  } catch (e) { console.warn("pollQueueStats failed", qid, e); }
+// Back-compat alias — older call sites still say pollQueueStats.
+const pollQueueStats = pollQueue;
+
+// Single combined poll. One observations query per queue per cycle,
+// covering both the live call list and the stats-panel metrics. 20-second
+// cadence + 250ms stagger between queues stays comfortably under the
+// /analytics 25 req/min rate limit even when watching several queues.
+let queuePollTimer = null;
+function startQueuePoll() {
+  if (queuePollTimer) return;
+  queuePollTimer = setInterval(() => {
+    selectedQueueIds.forEach((qid, i) => {
+      setTimeout(() => pollQueue(qid), i * 250);
+    });
+  }, 20000);
 }
-let statsPollTimer = null;
-let queueCallsPollTimer = null;
-function startStatsPoll() {
-  if (statsPollTimer) return;
-  statsPollTimer = setInterval(() => {
-    for (const qid of activeTabQueueIds()) pollQueueStats(qid);
-  }, 15000);
-}
-// Re-seed every watched queue every 10s. seedQueueCalls now prunes stale
-// conversations (anything this queue had but the live snapshot no longer
-// shows) so terminated calls don't linger when a WS disconnect event is
-// missed.
-function startQueueCallsPoll() {
-  if (queueCallsPollTimer) return;
-  queueCallsPollTimer = setInterval(() => {
-    for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
-  }, 10000);
-}
+// Older names that other callers already use — forward to the one timer.
+function startStatsPoll()      { startQueuePoll(); }
+function startQueueCallsPoll() { startQueuePoll(); }
 
 function renderStats() {
   const qid = activeTabQueueId;
@@ -2884,9 +2885,9 @@ function wireRowSelection() {
         refreshDerivedQueueState();
         saveQueueTabs();
         // Seed every queue in the tab + refresh members for its primary queue.
+        // pollQueue covers both call list and stats panel in one request.
         for (const qid of activeTabQueueIds()) {
-          seedQueueCalls(qid).catch(() => {});
-          pollQueueStats(qid);
+          pollQueue(qid).catch(() => {});
         }
         if (activeTabQueueId && !queueMembers.has(activeTabQueueId)) fetchQueueMembers(activeTabQueueId).then(renderAll);
         refreshSubscriptions().catch(() => {});
@@ -3742,13 +3743,13 @@ async function init() {
     await ensureChannel();
     await refreshSubscriptions();
     // Seed every watched queue with current-call snapshot (WS doesn't backfill).
-    for (const qid of selectedQueueIds) {
-      seedQueueCalls(qid).catch(() => {});
-      pollQueueStats(qid);
-    }
+    // pollQueue is the single combined observation request per queue.
+    // Stagger so the initial burst stays under the rate limit.
+    selectedQueueIds.forEach((qid, i) => {
+      setTimeout(() => pollQueue(qid).catch(() => {}), i * 250);
+    });
     if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
-    startStatsPoll();
-    startQueueCallsPoll();
+    startQueuePoll();
     // Preload call history so the tab count isn't a misleading 0 before first click.
     fetchCallHistory().catch(() => {});
     ensureMaxConf().catch(() => {});
