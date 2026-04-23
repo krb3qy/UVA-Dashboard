@@ -1313,6 +1313,7 @@ async function seedMyInteractions() {
 // so we pull the current snapshot of waiting/interacting calls per queue and then
 // let the WS topic keep things fresh from there.)
 async function seedQueueCalls(queueId) {
+  if (!queueId || typeof queueId !== "string") return;  // guard against undefined/null
   try {
     const body = {
       filter: { type: "and", predicates: [
@@ -2331,8 +2332,9 @@ function wireRowSelection() {
       selectedCallScope = tr.dataset.scope;
       renderAll();
     }
-    // tab click / close
-    const tab = e.target.closest(".tab");
+    // Queue tab click / close — my-panel tabs use [data-my-tab], so we
+    // only match queue tabs (which carry [data-qid]).
+    const tab = e.target.closest(".tab[data-qid]");
     if (tab) {
       const closeBtn = e.target.closest(".close");
       if (closeBtn) {
@@ -2763,13 +2765,25 @@ function switchMyTab(tab) {
 // ================================================================
 async function fetchMyRoles() {
   if (!currentUser?.id) return;
+  // Do NOT use apiFetch — it auto-redirects on 401, and this background
+  // call failing (insufficient scope, etc) should not force re-auth.
   try {
-    const r = await apiFetch(`/api/v2/users/${currentUser.id}/roles`);
-    const roleList = r?.roles || r?.entities || (Array.isArray(r) ? r : []);
-    userIsSupervisor = roleList.some(role => {
-      const n = (role.name || "").toLowerCase();
-      return n.includes("supervisor") || n.includes("admin") || n.includes("manager");
+    const tok = getToken();
+    if (!tok) { userIsSupervisor = false; applyRoleVisibility(); return; }
+    const resp = await fetch(`${apiBase()}/api/v2/users/${currentUser.id}/roles`, {
+      headers: { "Authorization": `Bearer ${tok}`, "Content-Type": "application/json" }
     });
+    if (!resp.ok) {
+      console.warn("role fetch status", resp.status);
+      userIsSupervisor = false;
+    } else {
+      const r = await resp.json();
+      const roleList = r?.roles || r?.entities || (Array.isArray(r) ? r : []);
+      userIsSupervisor = roleList.some(role => {
+        const n = (role.name || "").toLowerCase();
+        return n.includes("supervisor") || n.includes("admin") || n.includes("manager");
+      });
+    }
   } catch (e) {
     console.warn("role fetch failed", e);
     userIsSupervisor = false;
