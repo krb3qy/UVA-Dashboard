@@ -1462,13 +1462,15 @@ async function seedMyInteractions() {
 async function seedQueueCalls(queueId) {
   if (!queueId || typeof queueId !== "string") return;  // guard against undefined/null
   try {
-    // Query every observation-level state a conversation can be in while
-    // it's still "in the queue" — any of these metrics returning a non-
-    // empty observations[] means there's a live call to render.
-    const QUEUE_CALL_METRICS = [
-      "oWaiting", "oAlerting", "oInteracting", "oOnHold",
-      "oContacting", "oCommunicating", "oDialing"
-    ];
+    // Valid QueueObservationMetric enum values (verified from the API's
+    // own 400 response when invalid ones were sent):
+    //   oActiveUsers, oAlerting, oInteracting, oLongestInteracting,
+    //   oLongestWaiting, oMemberUsers, oOffQueueUsers, oOnQueueUsers,
+    //   oUserPresences, oUserRoutingStatuses, oWaiting
+    // Call-state metrics (what we need here) are the three below. Held
+    // calls are reported within oInteracting — GC doesn't expose held
+    // as a separate observation metric.
+    const QUEUE_CALL_METRICS = ["oWaiting", "oAlerting", "oInteracting"];
     const body = {
       filter: { type: "and", predicates: [
         { type: "dimension", dimension: "queueId", operator: "matches", value: queueId }
@@ -1487,18 +1489,11 @@ async function seedQueueCalls(queueId) {
           seen.add(obs.conversationId);
           convIds.push(obs.conversationId);
           // Create minimal placeholder row so the table renders immediately
-          const k = d.metric === "oOnHold"       ? "held"
-                  : d.metric === "oInteracting"  ? "connected"
-                  : d.metric === "oAlerting"     ? "alerting"
-                  : d.metric === "oContacting"   ? "contacting"
-                  : d.metric === "oCommunicating"? "connected"
-                  : d.metric === "oDialing"      ? "dialing"
-                  : "offering";
-          const stateDisplay = k === "held"       ? "Held"
-                             : k === "connected"  ? "ACD – Assigned"
-                             : k === "alerting"   ? "ACD – Alerting"
-                             : k === "contacting" ? "Contacting"
-                             : k === "dialing"    ? "Dialing"
+          const k = d.metric === "oInteracting" ? "connected"
+                  : d.metric === "oAlerting"    ? "alerting"
+                  : "offering";                                   // oWaiting
+          const stateDisplay = k === "connected" ? "ACD – Assigned"
+                             : k === "alerting"  ? "ACD – Alerting"
                              : "ACD – Wait Agent";
           const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
           conversations.set(obs.conversationId, {
@@ -1736,11 +1731,16 @@ function flattenObservationEvent(body) {
 
 // Periodic REST poll — WS topics sometimes miss updates, and stats on first
 // activation of a tab should populate without waiting for the next push.
+// Only valid QueueObservationMetric values here (verified from API error).
+// The n*/a*/f* aggregate metrics live on the separate /aggregates/query
+// endpoint — they can't be mixed into an observations query.
+// oUserPresences and oUserRoutingStatuses return breakdown arrays that
+// let us derive per-status user counts (idle / interacting / not_responding).
 const QUEUE_STATS_METRICS = [
-  "oOnQueueUsers", "oIdleUsers", "oInteractingUsers", "oNotRespondingUsers", "oOffQueueUsers",
-  "oWaiting", "oAlerting", "oOnHold", "oLongestWaiting",
-  "nOffered", "nAnswered", "nAbandon", "nTransferred",
-  "oServiceLevel", "oAverageWait", "oAverageHandle"
+  "oOnQueueUsers", "oOffQueueUsers", "oActiveUsers", "oMemberUsers",
+  "oWaiting", "oAlerting", "oInteracting",
+  "oLongestWaiting", "oLongestInteracting",
+  "oUserPresences", "oUserRoutingStatuses"
 ];
 async function pollQueueStats(qid) {
   if (!qid) return;
