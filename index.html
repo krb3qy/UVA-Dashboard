@@ -1710,27 +1710,36 @@ function renderToolbar() {
 // ================================================================
 //  Stats sidebar
 // ================================================================
-// Normalize any shape of observation payload into a flat { metric: number } map.
-// The WS topic v2.analytics.queues.{id}.observations delivers event bodies that
-// can be: array of { data: [{metric, stats}] }, { metrics: [...] }, or flat
-// { metric: value } objects. We accept all and merge.
+// Normalize any shape of observation payload into a flat { key: number } map.
+// Breakdown metrics (oUserRoutingStatuses, oUserPresences) have per-entry
+// `qualifier` fields (IDLE / INTERACTING / NOT_RESPONDING / OFF_QUEUE for
+// routing status; system presences for oUserPresences). We preserve the
+// qualifier by keying the output as `metric_qualifier` so they don't
+// collapse into a single value.
 function flattenObservationEvent(body) {
   const out = {};
-  const extract = (metric, stats) => {
+  const extract = (metric, qualifier, stats, obsArr) => {
     if (!metric) return;
-    const v = (stats && (stats.count ?? stats.sum ?? stats.max ?? stats.ratio)) ?? stats;
-    if (typeof v === "number") out[metric] = v;
+    let v = null;
+    if (stats) {
+      v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
+    }
+    // If no stats number but observations[] present, count of rows is the value.
+    if (v === null && Array.isArray(obsArr)) v = obsArr.length;
+    if (typeof v !== "number") return;
+    const key = qualifier ? `${metric}_${qualifier}` : metric;
+    out[key] = v;
   };
   const visit = (x) => {
     if (!x) return;
     if (Array.isArray(x)) { for (const it of x) visit(it); return; }
     if (typeof x === "object") {
-      if (x.metric && (x.stats || typeof x.value === "number")) extract(x.metric, x.stats ?? { count: x.value });
+      if (x.metric) extract(x.metric, x.qualifier, x.stats, x.observations);
       if (Array.isArray(x.metrics)) visit(x.metrics);
       if (Array.isArray(x.data)) visit(x.data);
       if (Array.isArray(x.results)) visit(x.results);
       if (Array.isArray(x.observations)) visit(x.observations);
-      // Flat object: { oWaiting: 5, oIdleUsers: 3 }
+      // Flat object fallback: { oWaiting: 5 }
       for (const [k, v] of Object.entries(x)) {
         if (/^[no][A-Z]/.test(k) && typeof v === "number") out[k] = v;
       }
@@ -1795,35 +1804,35 @@ function renderStats() {
   if (!qid) { body.innerHTML = '<div class="empty-msg">Select a queue tab to see stats</div>'; return; }
   const s = queueStats.get(qid) || {};
 
+  // Metrics that are always counts (if absent from the API response, the
+  // real value is 0 — GC omits zero-count observation metrics entirely).
+  const ZERO_IF_MISSING = new Set([
+    "oOnQueueUsers", "oOffQueueUsers", "oActiveUsers", "oMemberUsers",
+    "oWaiting", "oAlerting", "oInteracting",
+    "oUserRoutingStatuses_IDLE", "oUserRoutingStatuses_INTERACTING",
+    "oUserRoutingStatuses_NOT_RESPONDING", "oUserRoutingStatuses_COMMUNICATING",
+    "oUserRoutingStatuses_OFF_QUEUE"
+  ]);
+
   const metricValue = (mkey) => {
     if (typeof s[mkey] === "number") return s[mkey];
+    if (ZERO_IF_MISSING.has(mkey)) return 0;
     return "—";
   };
 
   const groups = [
     { key: "agents", title: "Agents", items: [
-      ["Logged On",   "oOnQueueUsers"],
-      ["Available",   "oIdleUsers"],
-      ["Interacting", "oInteractingUsers"],
-      ["Not Responding", "oNotRespondingUsers"],
-      ["Off Queue",   "oOffQueueUsers"]
+      ["Logged On",      "oOnQueueUsers"],
+      ["Available (Idle)","oUserRoutingStatuses_IDLE"],
+      ["Interacting",    "oUserRoutingStatuses_INTERACTING"],
+      ["Not Responding", "oUserRoutingStatuses_NOT_RESPONDING"],
+      ["Off Queue",      "oOffQueueUsers"]
     ]},
-    { key: "waiting", title: "Waiting", items: [
-      ["Interactions Waiting", "oWaiting"],
-      ["Interactions Alerting","oAlerting"],
-      ["Interactions Holding", "oOnHold"],
-      ["Longest Wait (s)",     "oLongestWaiting"]
-    ]},
-    { key: "handled", title: "Handled (period)", items: [
-      ["Offered",     "nOffered"],
-      ["Answered",    "nAnswered"],
-      ["Abandoned",   "nAbandon"],
-      ["Transferred", "nTransferred"]
-    ]},
-    { key: "sla", title: "SLA", items: [
-      ["Service Level %", "oServiceLevel"],
-      ["Avg Wait (s)",    "oAverageWait"],
-      ["Avg Handle (s)",  "oAverageHandle"]
+    { key: "waiting", title: "Interactions in queue", items: [
+      ["Waiting",          "oWaiting"],
+      ["Alerting",         "oAlerting"],
+      ["Interacting",      "oInteracting"],
+      ["Longest Wait (s)", "oLongestWaiting"]
     ]}
   ];
 
