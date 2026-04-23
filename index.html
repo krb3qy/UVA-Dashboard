@@ -1441,12 +1441,16 @@ async function seedMyInteractions() {
 async function seedQueueCalls(queueId) {
   if (!queueId || typeof queueId !== "string") return;  // guard against undefined/null
   try {
+    // IW-Merge only asks for oWaiting because it only cares about calls
+    // in the queue waiting for an agent. The dashboard needs EVERY active
+    // call in the queue — waiting, alerting, interacting, held — so we
+    // ask for all four metrics and their per-call observation rows.
     const body = {
       filter: { type: "and", predicates: [
         { type: "dimension", dimension: "queueId", operator: "matches", value: queueId }
       ]},
-      metrics: ["oWaiting"],
-      detailMetrics: ["oWaiting"]
+      metrics: ["oWaiting", "oInteracting", "oOnHold", "oAlerting"],
+      detailMetrics: ["oWaiting", "oInteracting", "oOnHold", "oAlerting"]
     };
     const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
     const seen = new Set();
@@ -1459,7 +1463,14 @@ async function seedQueueCalls(queueId) {
           seen.add(obs.conversationId);
           convIds.push(obs.conversationId);
           // Create minimal placeholder row so the table renders immediately
-          const k = d.metric === "oOnHold" ? "held" : (d.metric === "oInteracting" ? "connected" : "offering");
+          const k = d.metric === "oOnHold"      ? "held"
+                  : d.metric === "oInteracting" ? "connected"
+                  : d.metric === "oAlerting"    ? "alerting"
+                  : "offering";
+          const stateDisplay = k === "held"      ? "Held"
+                             : k === "connected" ? "ACD – Assigned"
+                             : k === "alerting"  ? "ACD – Alerting"
+                             : "ACD – Wait Agent";
           const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
           conversations.set(obs.conversationId, {
             id: obs.conversationId,
@@ -1468,7 +1479,7 @@ async function seedQueueCalls(queueId) {
             queueId,
             queueName: queuesById.get(queueId)?.name || queueId,
             stateKey: k,
-            stateDisplay: k === "held" ? "Held" : k === "connected" ? "ACD – Assigned" : "ACD – Wait Agent",
+            stateDisplay,
             held: k === "held",
             assignedUserId: null,
             assignedUserName: "",
