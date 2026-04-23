@@ -1828,11 +1828,35 @@ function startStatsPoll()      { startQueuePoll(); }
 function startQueueCallsPoll() { startQueuePoll(); }
 
 function renderStats() {
-  const qid = activeTabQueueId;
-  el("statsQueueName").textContent = qid ? (queuesById.get(qid)?.name || qid) : "—";
+  // Stats header + data follows the active TAB, not a single queue.
+  // For a group tab with N queues we aggregate: count metrics summed,
+  // duration metrics (longest-waiting / longest-interacting) maxed.
+  const tab = activeTab();
+  const qids = activeTabQueueIds();
   const body = el("statsBody");
-  if (!qid) { body.innerHTML = '<div class="empty-msg">Select a queue tab to see stats</div>'; return; }
-  const s = queueStats.get(qid) || {};
+
+  const tabLabel = tab
+    ? (tab.name || (qids.length === 1
+        ? (queuesById.get(qids[0])?.name || qids[0])
+        : `Group (${qids.length})`))
+    : "—";
+  el("statsQueueName").textContent = tabLabel;
+
+  if (!tab || qids.length === 0) {
+    body.innerHTML = '<div class="empty-msg">Select a queue tab to see stats</div>';
+    return;
+  }
+
+  const MAX_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
+  const s = {};
+  for (const q of qids) {
+    const src = queueStats.get(q) || {};
+    for (const [k, v] of Object.entries(src)) {
+      if (typeof v !== "number") continue;
+      if (MAX_METRICS.has(k)) s[k] = Math.max(s[k] || 0, v);
+      else s[k] = (s[k] || 0) + v;
+    }
+  }
 
   // Metrics that are always counts (if absent from the API response, the
   // real value is 0 — GC omits zero-count observation metrics entirely).
