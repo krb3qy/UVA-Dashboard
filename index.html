@@ -127,20 +127,20 @@
       padding: 1px 5px; font: inherit; color: #1e3a5f; border-radius: 2px; }
     .panel-head .phbtn:hover { background: var(--win-menu-hover); border-color: #8aa8d8; }
 
-    /* -------- Queue tabs (below panel head) --------
-       .panel has overflow: hidden, which means anything protruding up
-       from tab-bar gets CLIPPED by the queue-panel's top edge. The old
-       CSS had tabs exactly filling the tab-bar content area — any font
-       rendering variance pushed them over and the tops got cut off
-       (the "tabs cut in half by the panel above" bug).
-       Now: tab-bar is 42px with generous top padding; tabs have an
-       explicit 26px height that leaves ~14px content space which
-       comfortably fits the 12px/14px-line text. No margin-bottom
-       negative tricks — active tab is pure background/weight change.  */
+    /* -------- Tab bars --------
+       Two tab-bar instances: my-panel (My Interactions / Call History)
+       and queue-panel (queue tabs). They share styling for the tabs
+       themselves but need different container heights — queue tabs can
+       be a group tab with extra chips and need clearance so they don't
+       get clipped by .panel { overflow: hidden } above; my-panel tabs
+       are fixed content and don't need the same headroom.              */
     .tab-bar { display: flex; gap: 0; align-items: flex-end; overflow-x: auto;
       overflow-y: visible;
-      border-bottom: 1px solid var(--win-border); background: var(--win-panel-head);
-      padding: 12px 4px 0 6px; flex: 0 0 42px; min-height: 42px; }
+      border-bottom: 1px solid var(--win-border); background: var(--win-panel-head); }
+    /* My-panel tab-bar: slim header; tabs fit exactly */
+    #myTabBar { padding: 4px 4px 0 6px; flex: 0 0 32px; min-height: 32px; }
+    /* Queue-panel tab-bar: extra top padding for group-tab chip clearance */
+    #tabBar    { padding: 12px 4px 0 6px; flex: 0 0 42px; min-height: 42px; }
     .tab { padding: 5px 12px; background: linear-gradient(to bottom, #f0f0f0, #cfcfcf);
       border: 1px solid var(--win-border); border-bottom: none; font-size: 12px; cursor: pointer;
       border-radius: 4px 4px 0 0; display: inline-flex; align-items: center; gap: 6px;
