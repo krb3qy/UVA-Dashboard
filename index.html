@@ -1598,10 +1598,10 @@ function renderTabs() {
     const count = [...conversations.values()].filter(r => r.queueId && qidSet.has(r.queueId)).length;
     const isGroup = t.queueIds.length > 1;
     const cls = `tab${activeTabId === t.id ? " active" : ""}${isGroup ? " group-tab" : ""}`;
-    const qCountChip = isGroup ? `<span class="count" title="${t.queueIds.length} queues">${t.queueIds.length}q</span>` : "";
-    return `<div class="${cls}" data-tab-id="${escape(t.id)}" data-qid="${escape(t.queueIds[0] || '')}" title="${escape(label)}${isGroup ? ` · ${t.queueIds.length} queues` : ''}">
+    const qNames = t.queueIds.map(q => queuesById.get(q)?.name || q).join(", ");
+    const tip = isGroup ? `${label}\nQueues: ${qNames}\n(right-click to edit)` : `${label}\n(right-click to edit)`;
+    return `<div class="${cls}" data-tab-id="${escape(t.id)}" data-qid="${escape(t.queueIds[0] || '')}" title="${escape(tip)}">
       <span>${escape(label)}</span>
-      ${qCountChip}
       <span class="count">${count}</span>
       <span class="close" data-close-tab-id="${escape(t.id)}" title="Remove tab">✕</span>
     </div>`;
@@ -2467,10 +2467,18 @@ function renderTabGroupsSection() {
 // ================================================================
 function openCreateGroupModal(opts = {}) {
   openModal("createGroupModal");
-  const preselect = new Set(opts.preselectQids || []);
-  el("cgName").value = opts.defaultName || "";
+  const editing = opts.editTabId ? queueTabs.find(t => t.id === opts.editTabId) : null;
+  const preselect = new Set(opts.preselectQids || (editing?.queueIds) || []);
+  el("cgName").value = editing?.name || opts.defaultName || "";
   el("cgFilter").value = "";
-  el("cgDeleteDupes").checked = true;
+  el("cgDeleteDupes").checked = !editing;   // only meaningful on create
+  // Hide "delete dupes" checkbox when editing — doesn't apply
+  const dupesLabel = el("cgDeleteDupes").parentElement;
+  if (dupesLabel) dupesLabel.style.display = editing ? "none" : "";
+  // Retitle the modal + action button based on mode
+  const modal = el("createGroupModal").querySelector(".titlebar span:first-child");
+  if (modal) modal.textContent = editing ? "Edit Tab" : "Create Tab Group";
+  el("cgCreate").textContent = editing ? "Save" : "Create tab";
 
   // Division dropdown
   const divSel = el("cgDivision");
@@ -2532,23 +2540,35 @@ function openCreateGroupModal(opts = {}) {
     }
     if (qids.length === 0) return;
 
-    // Remove existing single-queue tabs for queues we're grouping (if asked)
-    if (el("cgDeleteDupes").checked) {
-      queueTabs = queueTabs.filter(t => !(t.queueIds.length === 1 && qids.includes(t.queueIds[0])));
-    }
     const divisionId = divSel.value || null;
-    const tab = { id: newTabId(), name: name || (queuesById.get(qids[0])?.name || ""), queueIds: qids, divisionId };
-    queueTabs.push(tab);
-    activeTabId = tab.id;
+    if (editing) {
+      // Edit mode: update the existing tab in place.
+      editing.name = name || editing.name;
+      editing.queueIds = qids;
+      editing.divisionId = divisionId;
+      activeTabId = editing.id;
+    } else {
+      if (el("cgDeleteDupes").checked) {
+        queueTabs = queueTabs.filter(t => !(t.queueIds.length === 1 && qids.includes(t.queueIds[0])));
+      }
+      const tab = { id: newTabId(), name: name || (queuesById.get(qids[0])?.name || ""), queueIds: qids, divisionId };
+      queueTabs.push(tab);
+      activeTabId = tab.id;
+    }
     refreshDerivedQueueState();
     saveQueueTabs();
     renderAll();
     renderTabGroupsSection();
-    renderQueueList(el("queueSearch")?.value || "");  // refresh top checkboxes
+    renderQueueList(el("queueSearch")?.value || "");
     refreshSubscriptions().catch(() => {});
     for (const qid of qids) seedQueueCalls(qid).catch(() => {});
     closeModal("createGroupModal");
-    showBanner({ type: "info", title: "Tab created", message: `${tab.name} — ${qids.length} queue(s)`, autoHideMs: 3000 });
+    showBanner({
+      type: "info",
+      title: editing ? "Tab updated" : "Tab created",
+      message: `${(editing || queueTabs[queueTabs.length-1]).name} — ${qids.length} queue(s)`,
+      autoHideMs: 3000
+    });
   };
 }
 
@@ -2784,6 +2804,12 @@ function wireRowSelection() {
       showColumnHeaderMenu(e.clientX, e.clientY, th.dataset.scope);
       return;
     }
+    const tabEl = e.target.closest(".tab[data-tab-id]");
+    if (tabEl) {
+      e.preventDefault();
+      showTabContextMenu(e.clientX, e.clientY, tabEl.dataset.tabId);
+      return;
+    }
     const tr = e.target.closest("tr.row");
     if (!tr) return;
     e.preventDefault();
@@ -2791,6 +2817,47 @@ function wireRowSelection() {
     selectedCallScope = tr.dataset.scope;
     renderAll();
     showRowContextMenu(e.clientX, e.clientY);
+  });
+}
+
+function showTabContextMenu(x, y, tabId) {
+  const tab = queueTabs.find(t => t.id === tabId); if (!tab) return;
+  const menu = el("ctxMenu");
+  const label = tab.name || (tab.queueIds.length === 1
+    ? (queuesById.get(tab.queueIds[0])?.name || tab.queueIds[0])
+    : `Group (${tab.queueIds.length})`);
+  const divName = tab.divisionId ? (divisionsById.get(tab.divisionId)?.name || tab.divisionId) : "";
+  const header = `<div class="item disabled" style="font-weight:600">${escape(label)}${divName ? ` · div: ${escape(divName)}` : ""}</div>`;
+  const queuesSection = tab.queueIds.length === 0
+    ? `<div class="item disabled" style="font-style:italic;color:var(--win-muted)">(no queues)</div>`
+    : tab.queueIds.map(qid => {
+        const qn = queuesById.get(qid)?.name || qid;
+        return `<div class="item disabled" style="padding-left:26px;color:#333">${escape(qn)}</div>`;
+      }).join("");
+  menu.innerHTML = header + `<div class="sep"></div>` + queuesSection + `<div class="sep"></div>` +
+    `<div class="item" data-tab-act="edit">Edit queues…</div>` +
+    `<div class="item" data-tab-act="rename">Rename tab…</div>` +
+    `<div class="sep"></div>` +
+    `<div class="item danger" data-tab-act="remove">Remove tab</div>`;
+  menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+  menu.querySelectorAll("[data-tab-act]").forEach(n => n.onclick = () => {
+    menu.classList.remove("active");
+    const act = n.dataset.tabAct;
+    if (act === "edit") {
+      openCreateGroupModal({ editTabId: tabId });
+    } else if (act === "rename") {
+      const next = prompt("Rename tab to:", tab.name || label);
+      if (next !== null) {
+        tab.name = next.trim();
+        saveQueueTabs(); renderAll();
+      }
+    } else if (act === "remove") {
+      queueTabs = queueTabs.filter(x => x.id !== tabId);
+      if (activeTabId === tabId) activeTabId = queueTabs[0]?.id || null;
+      refreshDerivedQueueState(); saveQueueTabs();
+      renderAll();
+      refreshSubscriptions().catch(() => {});
+    }
   });
 }
 
