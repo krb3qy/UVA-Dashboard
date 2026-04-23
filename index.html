@@ -488,6 +488,12 @@
         <div class="side-head">
           <span>Directory</span>
           <span class="sp"></span>
+          <select id="dirSort" title="Sort agents" style="font-size:10px;padding:0 2px;height:16px;border:1px solid var(--win-border-soft);background:#fff">
+            <option value="name-asc">Name A→Z</option>
+            <option value="name-desc">Name Z→A</option>
+            <option value="presence">Presence</option>
+            <option value="routing">Routing Status</option>
+          </select>
           <span class="count" id="dirCount">0</span>
         </div>
         <div class="side-body" id="dirBody">
@@ -924,7 +930,8 @@ const STORAGE = {
   alertMode: "gc_uvad_alert_mode",
   workspaces: "gc_uvad_workspaces",
   activeWorkspace: "gc_uvad_active_workspace",
-  statusNote: "gc_uvad_status_note"
+  statusNote: "gc_uvad_status_note",
+  dirSort: "gc_uvad_dir_sort"
 };
 
 const loginBase = () => `https://login.${CONFIG.environment}`;
@@ -1009,6 +1016,7 @@ let extensionPresent = false;         // last known handshake result
 let alertedConvIds = new Set();       // dashboard-fired alert dedupe
 let activeAlertConvId = null;         // currently showing dashboard alert
 let statusNoteText = "";
+let dirSortMode = "name-asc";    // name-asc | name-desc | presence | routing
 let ws = null;
 let wsChannelId = null;
 let wsChannelUri = null;
@@ -1266,7 +1274,13 @@ function handleNotification(msg) {
   const topic = msg.topicName || "";
   const body = msg.eventBody;
   if (topic.includes(".conversations.calls")) {
-    if (body && body.id) { ingestConversation(body); renderAll(); }
+    // v2.routing.queues.{queueId}.conversations.calls — extract queueId
+    // from the topic so a call that's lost its ACD leg still gets filed
+    // under the right queue.
+    let hintQid = null;
+    const m = topic.match(/^v2\.routing\.queues\.([^.]+)\.conversations\.calls$/);
+    if (m) hintQid = m[1];
+    if (body && body.id) { ingestConversation(body, hintQid); renderAll(); }
   } else if (topic.endsWith(".observations")) {
     const qid = topic.split(".")[3];
     if (qid && body) {
@@ -1305,7 +1319,7 @@ function mapPresence(sys) {
 // ================================================================
 //  Conversation normalization
 // ================================================================
-function ingestConversation(c) {
+function ingestConversation(c, hintQueueId) {
   const parts = c.participants || [];
   const customer = parts.find(p => p.purpose === "customer" || p.purpose === "external") || {};
   const agent = [...parts].reverse().find(p => p.purpose === "agent") || null;
@@ -1313,7 +1327,14 @@ function ingestConversation(c) {
   const monitor = parts.find(p => p.purpose === "monitor");
   const calls = (agent?.calls || customer?.calls || parts.flatMap(p => p.calls || []));
   const primaryCall = calls.find(cc => cc.state && cc.state !== "disconnected") || calls[0] || {};
-  const queueId = acd?.queueId || agent?.queueId || null;
+  // Try every participant for queueId — when a call moves ACD→agent, the
+  // ACD leg can have endTime + queueId dropped, and the agent leg doesn't
+  // always carry it either. Hint (from seeder/WS topic) is the last resort
+  // so a known-good queueId never gets nulled out.
+  const partQueueId = parts.map(p => p.queueId).find(Boolean);
+  // Preserve existing queueId on the conversation if we already knew it.
+  const existing = conversations.get(c.id);
+  const queueId = acd?.queueId || agent?.queueId || partQueueId || hintQueueId || existing?.queueId || null;
 
   const held = !!primaryCall.held;
   let stateKey = (primaryCall.state || agent?.state || "connected").toLowerCase();
@@ -1441,16 +1462,19 @@ async function seedMyInteractions() {
 async function seedQueueCalls(queueId) {
   if (!queueId || typeof queueId !== "string") return;  // guard against undefined/null
   try {
-    // IW-Merge only asks for oWaiting because it only cares about calls
-    // in the queue waiting for an agent. The dashboard needs EVERY active
-    // call in the queue — waiting, alerting, interacting, held — so we
-    // ask for all four metrics and their per-call observation rows.
+    // Query every observation-level state a conversation can be in while
+    // it's still "in the queue" — any of these metrics returning a non-
+    // empty observations[] means there's a live call to render.
+    const QUEUE_CALL_METRICS = [
+      "oWaiting", "oAlerting", "oInteracting", "oOnHold",
+      "oContacting", "oCommunicating", "oDialing"
+    ];
     const body = {
       filter: { type: "and", predicates: [
         { type: "dimension", dimension: "queueId", operator: "matches", value: queueId }
       ]},
-      metrics: ["oWaiting", "oInteracting", "oOnHold", "oAlerting"],
-      detailMetrics: ["oWaiting", "oInteracting", "oOnHold", "oAlerting"]
+      metrics: QUEUE_CALL_METRICS,
+      detailMetrics: QUEUE_CALL_METRICS
     };
     const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
     const seen = new Set();
@@ -1463,13 +1487,18 @@ async function seedQueueCalls(queueId) {
           seen.add(obs.conversationId);
           convIds.push(obs.conversationId);
           // Create minimal placeholder row so the table renders immediately
-          const k = d.metric === "oOnHold"      ? "held"
-                  : d.metric === "oInteracting" ? "connected"
-                  : d.metric === "oAlerting"    ? "alerting"
+          const k = d.metric === "oOnHold"       ? "held"
+                  : d.metric === "oInteracting"  ? "connected"
+                  : d.metric === "oAlerting"     ? "alerting"
+                  : d.metric === "oContacting"   ? "contacting"
+                  : d.metric === "oCommunicating"? "connected"
+                  : d.metric === "oDialing"      ? "dialing"
                   : "offering";
-          const stateDisplay = k === "held"      ? "Held"
-                             : k === "connected" ? "ACD – Assigned"
-                             : k === "alerting"  ? "ACD – Alerting"
+          const stateDisplay = k === "held"       ? "Held"
+                             : k === "connected"  ? "ACD – Assigned"
+                             : k === "alerting"   ? "ACD – Alerting"
+                             : k === "contacting" ? "Contacting"
+                             : k === "dialing"    ? "Dialing"
                              : "ACD – Wait Agent";
           const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
           conversations.set(obs.conversationId, {
@@ -1495,9 +1524,11 @@ async function seedQueueCalls(queueId) {
       }
     }
     // Upgrade each placeholder with full participant data so actions work.
+    // Pass the queueId as a hint — the full conversation may have lost
+    // queueId from its participants once it moved past ACD.
     for (const id of convIds) {
       apiFetch(`/api/v2/conversations/calls/${id}`)
-        .then(full => { ingestConversation(full); renderAll(); })
+        .then(full => { ingestConversation(full, queueId); renderAll(); })
         .catch(() => {});
     }
     renderAll();
@@ -1806,9 +1837,28 @@ function renderDirectory() {
   const ids = queueMembers.get(qid);
   if (!ids) { body.innerHTML = '<div class="empty-msg">Loading members…</div>'; el("dirCount").textContent = "0"; return; }
 
-  const members = [...ids].map(id => usersById.get(id) || { id, name: id })
-    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  const presenceRank = { available: 0, busy: 1, meeting: 2, away: 3, offline: 4 };
+  const routingRank  = { idle: 0, interacting: 1, communicating: 2, not_responding: 3, off_queue: 4, "": 5 };
+  const nameOf = m => (m.name || m.id || "").toLowerCase();
+  const members = [...ids].map(id => usersById.get(id) || { id, name: id });
+  members.sort((a, b) => {
+    if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
+    if (dirSortMode === "presence") {
+      const ra = presenceRank[a.presence || "offline"] ?? 99;
+      const rb = presenceRank[b.presence || "offline"] ?? 99;
+      if (ra !== rb) return ra - rb;
+      return nameOf(a).localeCompare(nameOf(b));
+    }
+    if (dirSortMode === "routing") {
+      const ra = routingRank[(a.routingStatus || "").toLowerCase()] ?? 99;
+      const rb = routingRank[(b.routingStatus || "").toLowerCase()] ?? 99;
+      if (ra !== rb) return ra - rb;
+      return nameOf(a).localeCompare(nameOf(b));
+    }
+    return nameOf(a).localeCompare(nameOf(b));    // name-asc (default)
+  });
   el("dirCount").textContent = members.length;
+  const sortSel = el("dirSort"); if (sortSel) sortSel.value = dirSortMode;
 
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
@@ -2659,6 +2709,7 @@ function loadSettings() {
   try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.statsGroupState); if (s) statsGroupState = JSON.parse(s); } catch {}
   try { statusNoteText = localStorage.getItem(STORAGE.statusNote) || ""; } catch { statusNoteText = ""; }
+  try { dirSortMode = localStorage.getItem(STORAGE.dirSort) || "name-asc"; } catch { dirSortMode = "name-asc"; }
   loadPerQueueCols();
 }
 function saveSettings() {
@@ -2745,6 +2796,17 @@ function wireStatusBar() {
   });
   el("sbNote").addEventListener("click", openStatusNoteEditor);
   el("sbAlertMode").addEventListener("click", toggleAlertMode);
+}
+
+function wireDirectory() {
+  const sel = el("dirSort");
+  if (!sel) return;
+  sel.value = dirSortMode;
+  sel.addEventListener("change", () => {
+    dirSortMode = sel.value;
+    try { localStorage.setItem(STORAGE.dirSort, dirSortMode); } catch {}
+    renderDirectory();
+  });
 }
 
 function toggleRightCol() {
@@ -3611,6 +3673,7 @@ async function init() {
   wireToolbar();
   wireMyTabBar();
   wireStatusBar();
+  wireDirectory();
   wireRowSelection();
   wireDragDrop();
   wireSplitters();
