@@ -1518,6 +1518,17 @@ async function seedQueueCalls(queueId) {
         }
       }
     }
+    // Prune stale rows: any conversation currently in our Map that's tied
+    // to this queue but NOT in the live observation snapshot is gone from
+    // the queue — disconnected, transferred out, or moved. WS "disconnect"
+    // events can be missed on reconnect; the observations query is
+    // authoritative for what's live. Never prune the user's own calls.
+    for (const [id, r] of [...conversations]) {
+      if (r.queueId === queueId && !r.hasMe && !seen.has(id)) {
+        conversations.delete(id);
+      }
+    }
+
     // Upgrade each placeholder with full participant data so actions work.
     // Pass the queueId as a hint — the full conversation may have lost
     // queueId from its participants once it moved past ACD.
@@ -1759,11 +1770,22 @@ async function pollQueueStats(qid) {
   } catch (e) { console.warn("pollQueueStats failed", qid, e); }
 }
 let statsPollTimer = null;
+let queueCallsPollTimer = null;
 function startStatsPoll() {
   if (statsPollTimer) return;
   statsPollTimer = setInterval(() => {
     for (const qid of activeTabQueueIds()) pollQueueStats(qid);
   }, 15000);
+}
+// Re-seed every watched queue every 10s. seedQueueCalls now prunes stale
+// conversations (anything this queue had but the live snapshot no longer
+// shows) so terminated calls don't linger when a WS disconnect event is
+// missed.
+function startQueueCallsPoll() {
+  if (queueCallsPollTimer) return;
+  queueCallsPollTimer = setInterval(() => {
+    for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
+  }, 10000);
 }
 
 function renderStats() {
@@ -3717,6 +3739,7 @@ async function init() {
     }
     if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
     startStatsPoll();
+    startQueueCallsPoll();
     // Preload call history so the tab count isn't a misleading 0 before first click.
     fetchCallHistory().catch(() => {});
     ensureMaxConf().catch(() => {});
