@@ -575,19 +575,25 @@
   <div class="modal">
     <div class="titlebar"><span>Settings</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
-      <label>Monitored queues — checked queues open as single-queue tabs</label>
+      <label>Monitored queues — check to watch; each queue starts in its own tab</label>
       <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
-      <div id="queueList" style="max-height:26vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
+      <div id="queueList" style="max-height:22vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
 
-      <label style="margin-top:14px">Tab Groups — hold N queues under one renamable tab</label>
-      <div id="tabGroupsList" style="max-height:24vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+      <label style="margin-top:14px">Tabs — rename any tab or combine multiple queues into one</label>
+      <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
+        Click <strong>Queues (N)</strong> on any tab to add more queues to it. A tab with more than
+        one queue becomes a group and shows 📁 in its label. Remove a queue here to pull it out
+        of the group.
+      </div>
+      <div id="tabGroupsList" style="max-height:22vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
       <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
         <input type="text" id="newGroupName" placeholder="New group name (e.g. Transfer Center)" style="flex:1" />
         <select id="newGroupDivision" style="max-width:180px"><option value="">(no division filter)</option></select>
         <button class="btn btn-sm" id="newGroupCreate">+ Add group</button>
       </div>
       <div style="font-size:11px;color:var(--win-muted);margin-top:4px">
-        Pick a division to auto-fill all its queues, or leave blank and add queues by hand after.
+        Pick a division to auto-fill all its queues, or leave blank and click "Queues (0)" on
+        the new tab to add them by hand.
       </div>
       <label style="margin-top:12px">Emergency queue (fires in-dashboard alert when calls arrive)</label>
       <select id="emergencyQueueSel"><option value="">(none)</option></select>
@@ -2239,17 +2245,20 @@ function renderQueueList(filter) {
     });
   if (all.length === 0) { list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>No matches</div>"; return; }
   list.innerHTML = all.map(q => {
+    const isWatched = watched.has(q.id);
     const hasSingle = queueTabs.some(t => t.queueIds.length === 1 && t.queueIds[0] === q.id);
-    const checked = hasSingle ? "checked" : "";
-    return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${checked}/> ${escape(q.name)}${watched.has(q.id) && !hasSingle ? ' <span style="color:var(--win-muted);font-size:10px">(in group)</span>' : ''}</label>`;
+    const groupTab = !hasSingle && isWatched ? queueTabs.find(t => t.queueIds.includes(q.id)) : null;
+    const groupLabel = groupTab ? (groupTab.name || `Group (${groupTab.queueIds.length})`) : "";
+    return `<label class="queue-picker-item"><input type="checkbox" data-qid="${escape(q.id)}" ${isWatched ? "checked" : ""}/> ${escape(q.name)}${groupLabel ? ` <span style="color:var(--win-muted);font-size:10px">(in tab: ${escape(groupLabel)})</span>` : ''}</label>`;
   }).join("");
   list.querySelectorAll("input[type=checkbox]").forEach(cb => {
     cb.addEventListener("change", async () => {
       const qid = cb.dataset.qid;
       if (cb.checked) {
-        // Creates a single-queue tab. Multi-queue grouping is managed
-        // separately in the Tab Groups section.
-        if (!queueTabs.some(t => t.queueIds.length === 1 && t.queueIds[0] === qid)) {
+        // Only create a new single-queue tab if this queue isn't already
+        // watched somewhere (either its own tab or inside a group).
+        const alreadyWatched = queueTabs.some(t => t.queueIds.includes(qid));
+        if (!alreadyWatched) {
           queueTabs.push({ id: newTabId(), name: "", queueIds: [qid], divisionId: null });
         }
         try {
@@ -2285,16 +2294,20 @@ function renderQueueList(filter) {
 function renderTabGroupsSection() {
   const host = el("tabGroupsList");
   if (!host) return;   // Settings modal not open
-  const groupTabs = queueTabs.filter(t => t.queueIds.length > 1 || t.name || t.divisionId);
-  if (groupTabs.length === 0) {
-    host.innerHTML = '<div class="empty-msg" style="padding:8px">No tab groups yet. Create one below.</div>';
+  // Show ALL tabs, not just multi-queue groups. Any tab can be renamed and
+  // hold any number of queues — the distinction between "single-queue" and
+  // "group" is only about how many queues are currently in it.
+  if (queueTabs.length === 0) {
+    host.innerHTML = '<div class="empty-msg" style="padding:8px">No tabs yet. Check a queue above to add one, or create a group below.</div>';
   } else {
-    host.innerHTML = groupTabs.map(t => {
+    host.innerHTML = queueTabs.map(t => {
       const div = t.divisionId ? (divisionsById.get(t.divisionId)?.name || t.divisionId) : "";
       const queueLabels = t.queueIds.map(q => queuesById.get(q)?.name || q).slice(0, 4).join(", ")
-        + (t.queueIds.length > 4 ? ` +${t.queueIds.length - 4}` : "");
+        + (t.queueIds.length > 4 ? ` +${t.queueIds.length - 4}` : "")
+        || "(no queues)";
+      const defaultName = t.queueIds.length === 1 ? (queuesById.get(t.queueIds[0])?.name || "") : "";
       return `<div class="queue-picker-item" style="flex-wrap:wrap;gap:4px">
-        <input type="text" data-rename-tab="${escape(t.id)}" value="${escape(t.name)}" placeholder="Tab name…" style="flex:1;min-width:120px" />
+        <input type="text" data-rename-tab="${escape(t.id)}" value="${escape(t.name)}" placeholder="${escape(defaultName || "Tab name…")}" style="flex:1;min-width:120px" />
         ${div ? `<span style="background:#d4e0f5;border:1px solid #8aa8d8;padding:0 6px;border-radius:2px;font-size:10px">div: ${escape(div)}</span>` : ""}
         <button class="btn btn-sm" data-edit-queues="${escape(t.id)}">Queues (${t.queueIds.length})</button>
         <button class="btn btn-sm" data-del-tab="${escape(t.id)}">Delete</button>
