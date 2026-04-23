@@ -593,22 +593,16 @@
       <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
       <div id="queueList" style="max-height:22vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
 
-      <label style="margin-top:14px">Tabs — rename any tab or combine multiple queues into one</label>
+      <label style="margin-top:14px">Tabs — each tab can hold one queue or many</label>
       <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
-        Click <strong>Queues (N)</strong> on any tab to add more queues to it. A tab with more than
-        one queue becomes a group and shows 📁 in its label. Remove a queue here to pull it out
-        of the group.
+        Combine checked queues into one tab, or click <strong>Queues (N)</strong> on any existing
+        tab to add more queues to it.
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <button class="btn btn-sm" id="combineCheckedBtn" disabled>Combine checked queues into one tab</button>
+        <button class="btn btn-sm" id="createGroupBtn">+ Create custom tab…</button>
       </div>
       <div id="tabGroupsList" style="max-height:22vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
-        <input type="text" id="newGroupName" placeholder="New group name (e.g. Transfer Center)" style="flex:1" />
-        <select id="newGroupDivision" style="max-width:180px"><option value="">(no division filter)</option></select>
-        <button class="btn btn-sm" id="newGroupCreate">+ Add group</button>
-      </div>
-      <div style="font-size:11px;color:var(--win-muted);margin-top:4px">
-        Pick a division to auto-fill all its queues, or leave blank and click "Queues (0)" on
-        the new tab to add them by hand.
-      </div>
       <label style="margin-top:12px">Emergency queue (fires in-dashboard alert when calls arrive)</label>
       <select id="emergencyQueueSel"><option value="">(none)</option></select>
       <label style="margin-top:12px">Alert delivery</label>
@@ -728,6 +722,30 @@
     <div class="actions">
       <button class="btn" id="colsReset">Reset</button>
       <button class="btn btn-primary" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE TAB GROUP MODAL -->
+<div id="createGroupModal" class="modal-backdrop">
+  <div class="modal" style="min-width:520px;max-width:680px">
+    <div class="titlebar"><span>Create Tab Group</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
+      <label>Group name</label>
+      <input type="text" id="cgName" placeholder="e.g. Pharmacy (All)" />
+      <label style="margin-top:10px">Queues in this tab</label>
+      <input type="text" id="cgFilter" placeholder="Filter queues…" />
+      <div id="cgQueueList" style="max-height:36vh;overflow:auto;border:1px solid var(--win-border);background:#fff;margin-top:4px"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;font-size:11px;align-items:center">
+        <label style="margin:0">Or pick a division to auto-fill:</label>
+        <select id="cgDivision" style="flex:1"><option value="">(none)</option></select>
+      </div>
+      <label style="margin-top:10px;font-size:11px"><input type="checkbox" id="cgDeleteDupes" checked /> Remove existing single-queue tabs for queues I'm grouping</label>
+      <div id="cgSummary" style="margin-top:6px;font-size:11px;color:var(--win-muted)"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="cgCreate">Create tab</button>
     </div>
   </div>
 </div>
@@ -2417,35 +2435,118 @@ function renderTabGroupsSection() {
     host.querySelectorAll("[data-edit-queues]").forEach(b => b.onclick = () => openEditTabQueuesModal(b.dataset.editQueues));
   }
 
-  // Populate new-group division dropdown
-  const divSel = el("newGroupDivision");
-  if (divSel) {
-    divSel.innerHTML = '<option value="">(no division filter)</option>' +
-      [...divisionsById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-        .map(d => `<option value="${escape(d.id)}">${escape(d.name)}</option>`).join("");
-  }
-  const createBtn = el("newGroupCreate");
-  if (createBtn) {
-    createBtn.onclick = async () => {
-      const name = el("newGroupName").value.trim();
-      const divisionId = el("newGroupDivision").value || null;
-      if (!name) { showBanner({ type: "warn", title: "Name required for group", autoHideMs: 2500 }); return; }
-      let qids = [];
-      if (divisionId) {
-        try { qids = await fetchQueuesInDivision(divisionId); }
-        catch (e) { showBanner({ type: "error", title: "Division queue fetch failed", message: e.message, autoHideMs: 4000 }); return; }
-      }
-      const tab = { id: newTabId(), name, queueIds: qids, divisionId };
-      queueTabs.push(tab);
-      if (!activeTabId) activeTabId = tab.id;
-      refreshDerivedQueueState(); saveQueueTabs();
-      el("newGroupName").value = "";
-      el("newGroupDivision").value = "";
-      renderTabGroupsSection(); renderAll();
-      refreshSubscriptions().catch(() => {});
-      for (const qid of qids) seedQueueCalls(qid).catch(() => {});
+  // "+ Create custom tab…" opens the full picker modal
+  const createBtn = el("createGroupBtn");
+  if (createBtn) createBtn.onclick = () => openCreateGroupModal();
+
+  // "Combine checked queues into one tab" — uses whatever is currently
+  // checked in the Monitored Queues list above.
+  const combineBtn = el("combineCheckedBtn");
+  if (combineBtn) {
+    const checkedQueues = () => [...document.querySelectorAll('#queueList input[type=checkbox]:checked')].map(c => c.dataset.qid);
+    const refresh = () => {
+      const n = checkedQueues().length;
+      combineBtn.disabled = n < 2;
+      combineBtn.textContent = n >= 2 ? `Combine ${n} checked queues into one tab` : "Combine checked queues into one tab";
+    };
+    refresh();
+    el("queueList").addEventListener("change", refresh);
+    combineBtn.onclick = () => {
+      const qids = checkedQueues();
+      if (qids.length < 2) return;
+      openCreateGroupModal({ preselectQids: qids, defaultName: "" });
     };
   }
+}
+
+// ================================================================
+//  Create Tab Group — dedicated modal with name + queue multi-select
+// ================================================================
+function openCreateGroupModal(opts = {}) {
+  openModal("createGroupModal");
+  const preselect = new Set(opts.preselectQids || []);
+  el("cgName").value = opts.defaultName || "";
+  el("cgFilter").value = "";
+  el("cgDeleteDupes").checked = true;
+
+  // Division dropdown
+  const divSel = el("cgDivision");
+  divSel.innerHTML = '<option value="">(none)</option>' +
+    [...divisionsById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      .map(d => `<option value="${escape(d.id)}">${escape(d.name)}</option>`).join("");
+  divSel.value = "";
+
+  // Queue list with checkboxes
+  const selected = new Set(preselect);
+  const renderList = (filter = "") => {
+    const f = filter.trim().toLowerCase();
+    const all = [...queuesById.values()]
+      .filter(q => !f || (q.name || "").toLowerCase().includes(f))
+      .sort((a, b) => {
+        const aS = selected.has(a.id), bS = selected.has(b.id);
+        if (aS !== bS) return aS ? -1 : 1;
+        return (a.name || "").localeCompare(b.name || "");
+      });
+    el("cgQueueList").innerHTML = all.length === 0
+      ? '<div class="empty-msg" style="padding:8px">No queues</div>'
+      : all.map(q => `<label class="queue-picker-item">
+          <input type="checkbox" data-cg-qid="${escape(q.id)}" ${selected.has(q.id) ? "checked" : ""}/>
+          ${escape(q.name)}
+        </label>`).join("");
+    el("cgQueueList").querySelectorAll("input[data-cg-qid]").forEach(cb => cb.onchange = () => {
+      if (cb.checked) selected.add(cb.dataset.cgQid); else selected.delete(cb.dataset.cgQid);
+      updateSummary();
+    });
+  };
+  const updateSummary = () => {
+    el("cgSummary").textContent = `${selected.size} queue(s) will be in this tab.`;
+  };
+  renderList();
+  updateSummary();
+
+  el("cgFilter").oninput = () => renderList(el("cgFilter").value);
+
+  // Auto-fill from division
+  divSel.onchange = async () => {
+    const did = divSel.value; if (!did) return;
+    try {
+      const qids = await fetchQueuesInDivision(did);
+      for (const q of qids) selected.add(q);
+      renderList(el("cgFilter").value);
+      updateSummary();
+    } catch (e) {
+      showBanner({ type: "error", title: "Division queue fetch failed", message: e.message, autoHideMs: 4000 });
+    }
+  };
+
+  el("cgCreate").onclick = () => {
+    const name = el("cgName").value.trim();
+    const qids = [...selected];
+    if (!name && qids.length > 1) {
+      el("cgName").focus();
+      el("cgName").placeholder = "Name required for multi-queue tab";
+      return;
+    }
+    if (qids.length === 0) return;
+
+    // Remove existing single-queue tabs for queues we're grouping (if asked)
+    if (el("cgDeleteDupes").checked) {
+      queueTabs = queueTabs.filter(t => !(t.queueIds.length === 1 && qids.includes(t.queueIds[0])));
+    }
+    const divisionId = divSel.value || null;
+    const tab = { id: newTabId(), name: name || (queuesById.get(qids[0])?.name || ""), queueIds: qids, divisionId };
+    queueTabs.push(tab);
+    activeTabId = tab.id;
+    refreshDerivedQueueState();
+    saveQueueTabs();
+    renderAll();
+    renderTabGroupsSection();
+    renderQueueList(el("queueSearch")?.value || "");  // refresh top checkboxes
+    refreshSubscriptions().catch(() => {});
+    for (const qid of qids) seedQueueCalls(qid).catch(() => {});
+    closeModal("createGroupModal");
+    showBanner({ type: "info", title: "Tab created", message: `${tab.name} — ${qids.length} queue(s)`, autoHideMs: 3000 });
+  };
 }
 
 // Edit queues-in-tab modal (simple reuse of the outer queue list)
