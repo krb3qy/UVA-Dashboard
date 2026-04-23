@@ -64,21 +64,24 @@
     .menu-dropdown .mi:hover .shortcut { color: #dfe; }
     .menu-dropdown .sep { height: 1px; background: #c0c0c0; margin: 3px 0; }
 
-    /* -------- Toolbar -------- */
+    /* -------- Action toolbar (bottom, PureConnect-style icon-above-label) -------- */
     .toolbar { display: flex; align-items: center; gap: 1px; padding: 2px 3px;
-      background: linear-gradient(to bottom, #f6f6f6, #dcdcdc);
-      border-bottom: 1px solid var(--win-border-soft); flex: 0 0 32px; overflow-x: auto; overflow-y: hidden; }
-    .toolbar .tbtn { display: inline-flex; align-items: center; gap: 4px;
-      padding: 3px 7px; background: transparent; border: 1px solid transparent;
-      border-radius: 2px; cursor: pointer; font: inherit; color: var(--win-text);
-      white-space: nowrap; font-size: 11px; height: 26px; }
+      background: linear-gradient(to top, #f6f6f6, #eeeeee);
+      overflow-x: auto; overflow-y: hidden; }
+    .toolbar-bottom { border-top: 1px solid var(--win-border); flex: 0 0 56px; padding: 3px 6px; }
+    .toolbar .tbtn { display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 2px; padding: 3px 8px; min-width: 52px; background: transparent;
+      border: 1px solid transparent; border-radius: 3px; cursor: pointer;
+      font: inherit; color: var(--win-text); white-space: nowrap;
+      font-size: 11px; height: 48px; }
+    .toolbar .tbtn .lbl { line-height: 1; }
     .toolbar .tbtn:hover:not(:disabled) { background: #fff7d2; border-color: #c0b776; }
     .toolbar .tbtn:active:not(:disabled) { background: #ffe8a0; }
     .toolbar .tbtn:disabled { color: #a0a0a0; cursor: default; }
     .toolbar .tbtn.active { background: #ffe8a0; border-color: #c0b776; }
-    .toolbar .tbtn svg { width: 16px; height: 16px; flex: 0 0 16px; }
-    .toolbar .tbtn:disabled svg { opacity: .45; }
-    .toolbar .sep { width: 1px; height: 22px; background: var(--win-border-soft); margin: 0 3px; flex: 0 0 1px; }
+    .toolbar .tbtn svg { width: 22px; height: 22px; flex: 0 0 22px; }
+    .toolbar .tbtn:disabled svg { opacity: .35; }
+    .toolbar .sep { width: 1px; height: 38px; background: var(--win-border-soft); margin: 0 5px; flex: 0 0 1px; }
     .toolbar .sp { flex: 1; }
 
     /* -------- Banner area -------- */
@@ -214,10 +217,10 @@
     .dir-row .rstatus { color: #777; font-size: 10px; font-variant-numeric: tabular-nums; }
     .dir-row.selected .rstatus { color: #c0d6ff; }
 
-    /* -------- Status bar -------- */
+    /* -------- Status bar (now at top, PureConnect-style header) -------- */
     .statusbar { display: flex; align-items: center; padding: 2px 0; background: #ece9d8;
-      border-top: 1px solid var(--win-border-soft); font-size: 11px; color: var(--win-muted);
-      height: 22px; flex: 0 0 22px; }
+      border-bottom: 1px solid var(--win-border-soft); font-size: 11px; color: var(--win-muted);
+      height: 24px; flex: 0 0 24px; }
     .statusbar .chunk { padding: 0 8px; border-right: 1px solid var(--win-border-soft);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .statusbar .chunk:last-child { border-right: none; }
@@ -383,93 +386,19 @@
     </div>
   </div>
 
-  <!-- TOOLBAR -->
-  <div class="toolbar" id="toolbar">
-    <button class="tbtn" data-act="makeCall" title="Make Call (Ctrl+M)">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M3 3c0-.6.4-1 1-1h2.3l1.4 3.5-1.8 1.1a10 10 0 0 0 4.5 4.5l1.1-1.8L15 10.7V13c0 .6-.4 1-1 1C7 14 2 9 2 2c0-.6.4-1 1-1h0z"/></svg>
-      Make Call
-    </button>
-    <span class="sep"></span>
-    <button class="tbtn" data-act="pickup" title="Pick Up selected queue call">
-      <svg viewBox="0 0 16 16"><path fill="#080" d="M8 1v7l3-3 1 1-5 5-5-5 1-1 3 3V1h2zm-6 12h12v2H2z"/></svg>
-      Pickup
-    </button>
-    <button class="tbtn" data-act="hold" title="Hold / Unhold">
-      <svg viewBox="0 0 16 16"><path fill="#c60" d="M4 3h3v10H4V3zm5 0h3v10H9V3z"/></svg>
-      Hold
-    </button>
-    <button class="tbtn" data-act="mute" title="Mute">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 2a3 3 0 0 0-3 3v3a3 3 0 1 0 6 0V5a3 3 0 0 0-3-3zm-5 6a5 5 0 0 0 4 4.9V15h2v-2.1A5 5 0 0 0 13 8h-2a3 3 0 0 1-6 0H3z"/><path stroke="#c00" stroke-width="1.8" d="M2 2l12 12"/></svg>
-      Mute
-    </button>
-    <button class="tbtn" data-act="private" title="Secure Pause recording">
-      <svg viewBox="0 0 16 16"><path fill="#b35" d="M8 1a4 4 0 0 0-4 4v2H3v8h10V7h-1V5a4 4 0 0 0-4-4zm0 2a2 2 0 0 1 2 2v2H6V5a2 2 0 0 1 2-2z"/></svg>
-      Private
-    </button>
-    <span class="sep"></span>
-    <button class="tbtn" data-act="transfer" title="Blind transfer">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M1 7h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V7z"/></svg>
-      Transfer
-    </button>
-    <button class="tbtn" data-act="consult" title="Consult transfer">
-      <svg viewBox="0 0 16 16"><path fill="#069" d="M1 5h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V5zm0 6h8v2H1v-2z"/></svg>
-      Consult
-    </button>
-    <button class="tbtn" data-act="voicemail" title="Send to voicemail">
-      <svg viewBox="0 0 16 16"><circle cx="4" cy="10" r="3" fill="none" stroke="#000"/><circle cx="12" cy="10" r="3" fill="none" stroke="#000"/><path stroke="#000" d="M4 10h8"/></svg>
-      Voicemail
-    </button>
-    <button class="tbtn" data-act="disconnect" title="Disconnect (Ctrl+D)">
-      <svg viewBox="0 0 16 16"><path fill="#c00" d="M3 7c3-4 7-4 10 0l-2 2a3 3 0 0 0-2-1v2l-2 1-2-1V8a3 3 0 0 0-2 1L3 7z" transform="rotate(135 8 8)"/></svg>
-      Disconnect
-    </button>
-    <span class="sep"></span>
-    <button class="tbtn" data-act="barge" title="Join / Barge into call">
-      <svg viewBox="0 0 16 16"><path fill="#060" d="M5 2h2v5h5v2H7v5H5V9H0V7h5V2zm8 0h2v12h-2V2z"/></svg>
-      Join
-    </button>
-    <button class="tbtn" data-act="listen" title="Silent monitor">
-      <svg viewBox="0 0 16 16"><path fill="#036" d="M8 2a4 4 0 0 0-4 4v4a4 4 0 0 0 1 2.6V15h1v-2h4v2h1v-2.4A4 4 0 0 0 12 10V6a4 4 0 0 0-4-4z"/></svg>
-      Listen
-    </button>
-    <button class="tbtn" data-act="coach" title="Coach (whisper)">
-      <svg viewBox="0 0 16 16"><path fill="#606" d="M3 3h10l-1 6H5l-1-2H2V5h2l-1-2zm2 8a2 2 0 1 0 2 2h-2v-2z"/></svg>
-      Coach
-    </button>
-    <span class="sep"></span>
-    <button class="tbtn" data-act="record" title="Start / stop recording">
-      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#c00"/></svg>
-      Record
-    </button>
-    <button class="tbtn" data-act="pause" title="Secure pause (mask PCI)">
-      <svg viewBox="0 0 16 16"><path fill="#b35" d="M5 3h2v10H5V3zm4 0h2v10H9V3z"/></svg>
-      Pause
-    </button>
-    <button class="tbtn" data-act="wrapup" title="Wrap-up code">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M2 3h12v10H2V3zm1 2v7h10V5H3zm2 1h6v1H5V6zm0 2h6v1H5V8zm0 2h4v1H5v-1z"/></svg>
-      Wrap-up
-    </button>
-    <span class="sep"></span>
-    <button class="tbtn" data-act="merge" title="Merge selected calls into conference">
-      <svg viewBox="0 0 16 16"><path fill="none" stroke="#036" stroke-width="1.5" d="M2 3v4c0 2 2 3 4 3h4c2 0 4 1 4 3v0M2 13v-4c0-2 2-3 4-3h4c2 0 4-1 4-3v0"/></svg>
-      Merge
-    </button>
-    <button class="tbtn" data-act="addParty" title="Add number to current call / conference">
-      <svg viewBox="0 0 16 16"><path fill="#060" d="M10 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM4 9h12v2H4V9zm-3 0v2H0V9h1zm12-2v2h-1V7h1z"/><path fill="#060" d="M3 12h2v4H3v-4zm-2 2v-1H0v-1h1v-1h1v1h1v1H2v1H1z"/></svg>
-      Add Party
-    </button>
-    <button class="tbtn" data-act="confDialer" title="Conference Dialer (saved speed-dial groups)">
-      <svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2" fill="#036"/><circle cx="12" cy="4" r="2" fill="#036"/><circle cx="4" cy="12" r="2" fill="#036"/><circle cx="12" cy="12" r="2" fill="#036"/><path fill="none" stroke="#036" d="M4 4h8M4 12h8M4 4v8M12 4v8"/></svg>
-      Conf Dial
-    </button>
-    <span class="sp"></span>
-    <button class="tbtn" data-act="settings" title="Settings">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6 3l-1.3-.3-.3-.8.7-1.2-1.2-1.2-1.2.7-.8-.3L9.5 4h-3l-.3 1.3-.8.3-1.2-.7-1.2 1.2.7 1.2-.3.8L2 8v2l1.3.3.3.8-.7 1.2 1.2 1.2 1.2-.7.8.3L6.5 14h3l.3-1.3.8-.3 1.2.7 1.2-1.2-.7-1.2.3-.8L14 9V8z"/></svg>
-    </button>
-    <button class="tbtn" data-act="popout" title="Pop out / Pop in" id="popoutBtn">
-      <svg viewBox="0 0 16 16"><path fill="none" stroke="#000" d="M2 2h7v2M9 2v5H2V2zm5 5V2h-5l2 2-4 4 1 1 4-4 2 2z"/></svg>
-      Pop Out
-    </button>
+  <!-- STATUS BAR (PureConnect-style header, directly under menu) -->
+  <div class="statusbar" id="statusBar">
+    <span class="chunk" id="sbUser">—</span>
+    <span class="chunk" id="sbPresenceChunk" style="cursor:pointer" title="Click to change ACD status"><span class="p-dot offline" id="sbPresenceDot"></span><span id="sbPresence">Offline</span> <span id="sbPresenceDur" style="color:var(--win-muted);margin-left:4px"></span></span>
+    <span class="chunk" id="sbRouting">Routing: —</span>
+    <span class="chunk" id="sbStation">Station: —</span>
+    <span class="chunk" id="sbNote" style="cursor:pointer" title="Click to set status note">Note: —</span>
+    <span class="chunk" id="sbConfLaunch" style="cursor:pointer;color:#036" title="Launch Conference Dialer">☎ Conf Dialer</span>
+    <span class="chunk" id="sbEnv">—</span>
+    <span class="chunk sp"></span>
+    <span class="chunk" id="sbAlertMode" style="cursor:pointer" title="Click to cycle alert mode">Alerts: auto</span>
+    <span class="chunk" id="sbConnected">Connecting…</span>
+    <span class="chunk" id="sbClock">—</span>
   </div>
 
   <!-- BANNER -->
@@ -558,19 +487,86 @@
     </div>
   </div>
 
-  <!-- STATUS BAR -->
-  <div class="statusbar" id="statusBar">
-    <span class="chunk" id="sbUser">—</span>
-    <span class="chunk" id="sbPresenceChunk" style="cursor:pointer" title="Click to change ACD status"><span class="p-dot offline" id="sbPresenceDot"></span><span id="sbPresence">Offline</span> <span id="sbPresenceDur" style="color:var(--win-muted);margin-left:4px"></span></span>
-    <span class="chunk" id="sbRouting">Routing: —</span>
-    <span class="chunk" id="sbStation">Station: —</span>
-    <span class="chunk" id="sbNote" style="cursor:pointer" title="Click to set status note">Note: —</span>
-    <span class="chunk" id="sbConfLaunch" style="cursor:pointer;color:#036" title="Launch Conference Dialer">☎ Conf Dialer</span>
-    <span class="chunk" id="sbEnv">—</span>
-    <span class="chunk sp"></span>
-    <span class="chunk" id="sbAlertMode" style="cursor:pointer" title="Click to cycle alert mode">Alerts: auto</span>
-    <span class="chunk" id="sbConnected">Connecting…</span>
-    <span class="chunk" id="sbClock">—</span>
+  <!-- ACTION TOOLBAR (anchored at the very bottom, PureConnect-style icon-above-label) -->
+  <div class="toolbar toolbar-bottom" id="toolbar">
+    <button class="tbtn" data-act="makeCall" title="Make Call (Ctrl+M)">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M3 3c0-.6.4-1 1-1h2.3l1.4 3.5-1.8 1.1a10 10 0 0 0 4.5 4.5l1.1-1.8L15 10.7V13c0 .6-.4 1-1 1C7 14 2 9 2 2c0-.6.4-1 1-1h0z"/></svg>
+      <span class="lbl">Make Call</span>
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="pickup" title="Pick Up selected queue call">
+      <svg viewBox="0 0 16 16"><path fill="#080" d="M8 1v7l3-3 1 1-5 5-5-5 1-1 3 3V1h2zm-6 12h12v2H2z"/></svg>
+      <span class="lbl">Pickup</span>
+    </button>
+    <button class="tbtn" data-act="hold" title="Hold / Unhold">
+      <svg viewBox="0 0 16 16"><path fill="#c60" d="M4 3h3v10H4V3zm5 0h3v10H9V3z"/></svg>
+      <span class="lbl">Hold</span>
+    </button>
+    <button class="tbtn" data-act="mute" title="Mute">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 2a3 3 0 0 0-3 3v3a3 3 0 1 0 6 0V5a3 3 0 0 0-3-3zm-5 6a5 5 0 0 0 4 4.9V15h2v-2.1A5 5 0 0 0 13 8h-2a3 3 0 0 1-6 0H3z"/><path stroke="#c00" stroke-width="1.8" d="M2 2l12 12"/></svg>
+      <span class="lbl">Mute</span>
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="transfer" title="Blind transfer">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M1 7h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V7z"/></svg>
+      <span class="lbl">Transfer</span>
+    </button>
+    <button class="tbtn" data-act="consult" title="Consult transfer">
+      <svg viewBox="0 0 16 16"><path fill="#069" d="M1 5h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V5zm0 6h8v2H1v-2z"/></svg>
+      <span class="lbl">Consult</span>
+    </button>
+    <button class="tbtn" data-act="voicemail" title="Send to voicemail">
+      <svg viewBox="0 0 16 16"><circle cx="4" cy="10" r="3" fill="none" stroke="#000"/><circle cx="12" cy="10" r="3" fill="none" stroke="#000"/><path stroke="#000" d="M4 10h8"/></svg>
+      <span class="lbl">Voicemail</span>
+    </button>
+    <button class="tbtn" data-act="disconnect" title="Disconnect (Ctrl+D)">
+      <svg viewBox="0 0 16 16"><path fill="#c00" d="M3 7c3-4 7-4 10 0l-2 2a3 3 0 0 0-2-1v2l-2 1-2-1V8a3 3 0 0 0-2 1L3 7z" transform="rotate(135 8 8)"/></svg>
+      <span class="lbl">Disconnect</span>
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="barge" title="Join / Barge into call (supervisor)">
+      <svg viewBox="0 0 16 16"><path fill="#060" d="M5 2h2v5h5v2H7v5H5V9H0V7h5V2zm8 0h2v12h-2V2z"/></svg>
+      <span class="lbl">Join</span>
+    </button>
+    <button class="tbtn" data-act="listen" title="Silent monitor (supervisor)">
+      <svg viewBox="0 0 16 16"><path fill="#036" d="M8 2a4 4 0 0 0-4 4v4a4 4 0 0 0 1 2.6V15h1v-2h4v2h1v-2.4A4 4 0 0 0 12 10V6a4 4 0 0 0-4-4z"/></svg>
+      <span class="lbl">Listen</span>
+    </button>
+    <button class="tbtn" data-act="coach" title="Coach / whisper (supervisor)">
+      <svg viewBox="0 0 16 16"><path fill="#606" d="M3 3h10l-1 6H5l-1-2H2V5h2l-1-2zm2 8a2 2 0 1 0 2 2h-2v-2z"/></svg>
+      <span class="lbl">Coach</span>
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="record" title="Start / stop recording">
+      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#c00"/></svg>
+      <span class="lbl">Record</span>
+    </button>
+    <button class="tbtn" data-act="wrapup" title="Wrap-up code">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M2 3h12v10H2V3zm1 2v7h10V5H3zm2 1h6v1H5V6zm0 2h6v1H5V8zm0 2h4v1H5v-1z"/></svg>
+      <span class="lbl">Wrap-up</span>
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" data-act="merge" title="Merge selected calls into conference">
+      <svg viewBox="0 0 16 16"><path fill="none" stroke="#036" stroke-width="1.5" d="M2 3v4c0 2 2 3 4 3h4c2 0 4 1 4 3v0M2 13v-4c0-2 2-3 4-3h4c2 0 4-1 4-3v0"/></svg>
+      <span class="lbl">Merge</span>
+    </button>
+    <button class="tbtn" data-act="addParty" title="Add number to current call / conference">
+      <svg viewBox="0 0 16 16"><path fill="#060" d="M10 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM4 9h12v2H4V9zm-3 0v2H0V9h1zm12-2v2h-1V7h1z"/><path fill="#060" d="M3 12h2v4H3v-4zm-2 2v-1H0v-1h1v-1h1v1h1v1H2v1H1z"/></svg>
+      <span class="lbl">Add Party</span>
+    </button>
+    <button class="tbtn" data-act="confDialer" title="Conference Dialer (saved speed-dial groups)">
+      <svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2" fill="#036"/><circle cx="12" cy="4" r="2" fill="#036"/><circle cx="4" cy="12" r="2" fill="#036"/><circle cx="12" cy="12" r="2" fill="#036"/><path fill="none" stroke="#036" d="M4 4h8M4 12h8M4 4v8M12 4v8"/></svg>
+      <span class="lbl">Conf Dial</span>
+    </button>
+    <span class="sp"></span>
+    <button class="tbtn" data-act="settings" title="Settings">
+      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6 3l-1.3-.3-.3-.8.7-1.2-1.2-1.2-1.2.7-.8-.3L9.5 4h-3l-.3 1.3-.8.3-1.2-.7-1.2 1.2.7 1.2-.3.8L2 8v2l1.3.3.3.8-.7 1.2 1.2 1.2 1.2-.7.8.3L6.5 14h3l.3-1.3.8-.3 1.2.7 1.2-1.2-.7-1.2.3-.8L14 9V8z"/></svg>
+      <span class="lbl">Settings</span>
+    </button>
+    <button class="tbtn" data-act="popout" title="Pop out / Pop in" id="popoutBtn">
+      <svg viewBox="0 0 16 16"><path fill="none" stroke="#000" d="M2 2h7v2M9 2v5H2V2zm5 5V2h-5l2 2-4 4 1 1 4-4 2 2z"/></svg>
+      <span class="lbl">Pop Out</span>
+    </button>
   </div>
 </div>
 
