@@ -321,6 +321,38 @@
       padding: 3px 8px; font-size: 11px; pointer-events: none; z-index: 900;
       box-shadow: 2px 2px 6px rgba(0,0,0,.3); display: none; }
     .drag-preview.active { display: block; }
+
+    /* -------- Floating call widgets (per-my-call mini phone) -------- */
+    #callWidgetHost { position: fixed; bottom: 70px; right: 14px; z-index: 850;
+      display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+      pointer-events: none; }
+    .call-widget { pointer-events: auto; width: 280px; background: #fff;
+      border: 1px solid var(--win-border); box-shadow: 2px 2px 10px rgba(0,0,0,.25);
+      border-radius: 4px; font-size: 12px; overflow: hidden; }
+    .call-widget.dragging { opacity: .85; }
+    .call-widget .cw-head { background: linear-gradient(to bottom, #316ac5, #2252a8);
+      color: #fff; padding: 4px 8px; font-weight: 600; display: flex; align-items: center;
+      gap: 6px; cursor: move; user-select: none; }
+    .call-widget .cw-head .cw-state { font-size: 10px; font-weight: normal;
+      background: rgba(255,255,255,.18); padding: 0 5px; border-radius: 2px; }
+    .call-widget .cw-head .cw-close { margin-left: auto; cursor: pointer; padding: 0 4px; }
+    .call-widget .cw-head .cw-close:hover { background: #c00000; }
+    .call-widget .cw-body { padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .call-widget .cw-party { font-weight: 600; font-size: 13px; }
+    .call-widget .cw-number { color: var(--win-muted); font-size: 11px; }
+    .call-widget .cw-duration { color: var(--win-muted); font-size: 11px;
+      font-variant-numeric: tabular-nums; }
+    .call-widget .cw-actions { display: flex; gap: 4px; padding: 6px 8px;
+      background: #f4f4f4; border-top: 1px solid var(--win-border-soft); }
+    .call-widget .cw-actions button { flex: 1; background: #fff; border: 1px solid #c0c0c0;
+      padding: 3px 4px; font-size: 11px; cursor: pointer; border-radius: 2px; }
+    .call-widget .cw-actions button:hover:not(:disabled) { background: #e5f1fb; border-color: #3c7fb1; }
+    .call-widget .cw-actions button:disabled { color: #a0a0a0; cursor: default; }
+    .call-widget .cw-actions button.cw-danger { color: #c00000; }
+    .call-widget .cw-actions button.cw-danger:hover:not(:disabled) { background: #c00000; color: #fff; }
+    .call-widget.state-alerting .cw-head { background: linear-gradient(to bottom, #d88a00, #a86800); }
+    .call-widget.state-held .cw-head { background: linear-gradient(to bottom, #b35900, #8a4400); }
+    .call-widget.state-disconnected { opacity: .6; }
   </style>
 </head>
 <body>
@@ -909,6 +941,9 @@
 
 <!-- DRAG PREVIEW -->
 <div id="dragPreview" class="drag-preview"></div>
+
+<!-- FLOATING CALL WIDGETS -->
+<div id="callWidgetHost"></div>
 
 <script>
 // ================================================================
@@ -2135,11 +2170,139 @@ function renderAll() {
   renderStats();
   renderDirectory();
   renderMyPresence();
+  renderCallWidgets();
+}
+
+// ================================================================
+//  Floating call widgets — one per active "my" call
+// ================================================================
+// A widget is spawned for every conversation with hasMe=true and removed
+// on disconnect. Draggable via the title bar; dismissable via the X
+// (closes the widget, not the call). State + duration tick on every
+// renderAll / duration-tick cycle.
+const callWidgets = new Map();                       // convId → { el, dragPos? }
+const callWidgetDismissed = new Set();               // convIds user X'd out manually
+
+function renderCallWidgets() {
+  const host = el("callWidgetHost");
+  if (!host) return;
+  const myCalls = [...conversations.values()].filter(r => r.hasMe && !r.disconnected);
+  const liveIds = new Set(myCalls.map(r => r.id));
+
+  // Remove widgets whose calls are gone or user-dismissed
+  for (const [cid, w] of [...callWidgets]) {
+    if (!liveIds.has(cid) || callWidgetDismissed.has(cid)) {
+      w.el.remove();
+      callWidgets.delete(cid);
+    }
+  }
+
+  for (const r of myCalls) {
+    if (callWidgetDismissed.has(r.id)) continue;
+    let w = callWidgets.get(r.id);
+    if (!w) {
+      const div = document.createElement("div");
+      div.className = "call-widget";
+      div.dataset.cid = r.id;
+      host.appendChild(div);
+      w = { el: div };
+      callWidgets.set(r.id, w);
+      wireCallWidgetDrag(div);
+    }
+    updateCallWidget(w.el, r);
+  }
+}
+
+function updateCallWidget(el_, r) {
+  el_.className = `call-widget state-${r.stateKey || "connected"}`;
+  const dur = humanDuration(Date.now() - r.startTimeMs);
+  const party = r.name || r.number || r.id;
+  const stateLabel = r.stateDisplay || (r.stateKey || "").toUpperCase();
+  const isHeld = r.stateKey === "held";
+  const isAlerting = r.stateKey === "alerting";
+  const disc = `<button data-cw-act="disconnect" class="cw-danger" ${isAlerting ? 'disabled title="Answer or dismiss first"' : ""}>Disconnect</button>`;
+  el_.innerHTML = `
+    <div class="cw-head">
+      <span>📞</span>
+      <span class="cw-state">${escape(stateLabel)}</span>
+      <span class="cw-close" data-cw-dismiss title="Hide widget (call stays active)">×</span>
+    </div>
+    <div class="cw-body">
+      <div class="cw-party">${escape(party)}</div>
+      ${r.number && r.number !== party ? `<div class="cw-number">${escape(r.number)}</div>` : ""}
+      <div class="cw-duration">${escape(dur)}</div>
+    </div>
+    <div class="cw-actions">
+      ${isAlerting
+        ? `<button data-cw-act="answer">Answer</button>`
+        : `<button data-cw-act="hold">${isHeld ? "Unhold" : "Hold"}</button>`}
+      <button data-cw-act="mute">Mute</button>
+      <button data-cw-act="transfer">Transfer</button>
+      <button data-cw-act="addParty">Add</button>
+      ${disc}
+    </div>`;
+  el_.querySelectorAll("[data-cw-act]").forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const act = b.dataset.cwAct;
+    const row = conversations.get(r.id);
+    if (!row) return;
+    selectedCallId = r.id;
+    selectedCallScope = "my";
+    doAction(act, row);
+  });
+  const close = el_.querySelector("[data-cw-dismiss]");
+  if (close) close.onclick = (e) => {
+    e.stopPropagation();
+    callWidgetDismissed.add(r.id);
+    renderCallWidgets();
+  };
+}
+
+function wireCallWidgetDrag(div) {
+  const head = div.querySelector(".cw-head") || div;
+  let startX, startY, origRight, origBottom, dragging = false;
+  head.addEventListener("mousedown", (e) => {
+    if (e.target.matches("[data-cw-dismiss]")) return;
+    dragging = true;
+    div.classList.add("dragging");
+    const rect = div.getBoundingClientRect();
+    startX = e.clientX; startY = e.clientY;
+    origRight = window.innerWidth - rect.right;
+    origBottom = window.innerHeight - rect.bottom;
+    // Detach from the flex column so it stays where dropped
+    div.style.position = "fixed";
+    div.style.right = origRight + "px";
+    div.style.bottom = origBottom + "px";
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    div.style.right = Math.max(4, origRight - dx) + "px";
+    div.style.bottom = Math.max(4, origBottom - dy) + "px";
+  });
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    div.classList.remove("dragging");
+  });
 }
 
 function startDurationTick() {
   if (durationTickTimer) return;
-  durationTickTimer = setInterval(() => { renderMy(); renderQueue(); }, 1000);
+  durationTickTimer = setInterval(() => {
+    renderMy();
+    renderQueue();
+    // Update each call widget's duration in place — avoids full re-render
+    // which would tear down and re-create the DOM every second.
+    for (const [cid, w] of callWidgets) {
+      const row = conversations.get(cid);
+      if (!row) continue;
+      const durEl = w.el.querySelector(".cw-duration");
+      if (durEl) durEl.textContent = humanDuration(Date.now() - row.startTimeMs);
+    }
+  }, 1000);
 }
 
 // ================================================================
