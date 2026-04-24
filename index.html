@@ -27,11 +27,14 @@
       --state-alerting: #cc6600;
       --state-held: #b35900;
       --state-disconnected: #808080;
+      /* Presence palette (user-specified):
+         Available → green; Busy + Meeting → red; Away/Break/Meal/Training → orange;
+         On Queue / Idle → light blue; Offline / Unknown → grey.           */
       --presence-available: #2e8b2e;
       --presence-busy: #c40000;
-      --presence-away: #d89b00;
+      --presence-away: #e07b00;
+      --presence-onqueue: #3ba9e0;
       --presence-offline: #888888;
-      --presence-meeting: #7a3fb3;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -231,8 +234,8 @@
     .dir-row .p-dot.available { background: var(--presence-available); }
     .dir-row .p-dot.busy { background: var(--presence-busy); }
     .dir-row .p-dot.away { background: var(--presence-away); }
+    .dir-row .p-dot.onqueue { background: var(--presence-onqueue); }
     .dir-row .p-dot.offline { background: var(--presence-offline); }
-    .dir-row .p-dot.meeting { background: var(--presence-meeting); }
     .dir-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dir-row .rstatus { color: #777; font-size: 10px; font-variant-numeric: tabular-nums; }
     .dir-row.selected .rstatus { color: #c0d6ff; }
@@ -250,8 +253,8 @@
     .statusbar .p-dot.available { background: var(--presence-available); }
     .statusbar .p-dot.busy { background: var(--presence-busy); }
     .statusbar .p-dot.away { background: var(--presence-away); }
+    .statusbar .p-dot.onqueue { background: var(--presence-onqueue); }
     .statusbar .p-dot.offline { background: var(--presence-offline); }
-    .statusbar .p-dot.meeting { background: var(--presence-meeting); }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #888; }
     .dot.connected { background: var(--state-connected); }
     .dot.warn { background: #e6a300; }
@@ -517,6 +520,10 @@
           <span class="dir-tab active" data-dir-tab="agents">Agents</span>
           <span class="dir-tab" data-dir-tab="dialer">Dialer Groups</span>
           <span class="sp" style="flex:1"></span>
+          <span id="dirSearchWrap" style="display:inline-flex;align-items:center;border:1px solid var(--win-border-soft);background:#fff;height:16px;padding:0 2px">
+            <svg viewBox="0 0 16 16" width="11" height="11" style="flex:0 0 11px"><path fill="none" stroke="#555" stroke-width="1.5" d="M10 10l3 3M11 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"/></svg>
+            <input type="text" id="dirSearch" placeholder="Search agents…" style="border:none;outline:none;background:transparent;font-size:10px;width:90px;padding:0 2px" />
+          </span>
           <select id="dirSort" title="Sort agents" style="font-size:10px;padding:0 2px;height:16px;border:1px solid var(--win-border-soft);background:#fff">
             <option value="name-asc">Name A→Z</option>
             <option value="name-desc">Name Z→A</option>
@@ -524,7 +531,7 @@
             <option value="routing">Routing Status</option>
           </select>
           <button class="btn btn-sm" id="dirConfBtn" style="display:none;padding:0 6px;font-size:11px;height:18px">Conference 0</button>
-          <span class="count" id="dirCount">0</span>
+          <span class="count" id="dirCount" style="display:none">0</span>
         </div>
         <div class="side-body" id="dirBody">
           <div class="empty-msg">Select a queue to load members</div>
@@ -1373,7 +1380,9 @@ function handleNotification(msg) {
   } else if (topic.endsWith(".presence")) {
     const uid = topic.split(".")[2];
     const u = usersById.get(uid) || { id: uid };
-    u.presence = mapPresence(body?.presenceDefinition?.systemPresence || body?.source || "");
+    const rawP = body?.presenceDefinition?.systemPresence || body?.source || "";
+    u.presence = mapPresence(rawP);
+    if (rawP) u.presenceRaw = rawP;
     usersById.set(uid, u);
     if (uid === currentUser?.id) renderMyPresence();
     renderDirectory();
@@ -1387,27 +1396,43 @@ function handleNotification(msg) {
   }
 }
 
-// Map every valid GC systemPresence enum value to one of our 5 css color
-// buckets. Enum per swagger: UNKNOWN, AVAILABLE, AWAY, BUSY, OFFLINE,
-// IDLE, ON_QUEUE, MEAL, TRAINING, MEETING, BREAK. ON_QUEUE / IDLE map to
-// "busy" because the agent is in active ACD routing — not idle-available.
+// Map every valid GC systemPresence enum value to our css color buckets.
+// Enum per swagger: UNKNOWN, AVAILABLE, AWAY, BUSY, OFFLINE, IDLE, ON_QUEUE,
+// MEAL, TRAINING, MEETING, BREAK. Color buckets per user spec:
+//   available    → green
+//   busy         → red  (BUSY + MEETING)
+//   away         → orange (AWAY, BREAK, MEAL, TRAINING)
+//   onqueue      → light blue (ON_QUEUE, IDLE)
+//   offline      → grey (OFFLINE, UNKNOWN, empty)
 function mapPresence(sys) {
   const s = (sys || "").toString().toUpperCase().replace(/[\s_-]/g, "");
   switch (s) {
     case "AVAILABLE":                          return "available";
     case "BUSY":
-    case "ONQUEUE":
-    case "IDLE":                               return "busy";
+    case "MEETING":                            return "busy";
     case "AWAY":
     case "BREAK":
     case "MEAL":
     case "TRAINING":                           return "away";
-    case "MEETING":                            return "meeting";
+    case "ONQUEUE":
+    case "IDLE":                               return "onqueue";
     case "OFFLINE":
     case "UNKNOWN":
     case "":                                   return "offline";
     default:                                   return "offline";
   }
+}
+
+// Human-readable presence name from the raw systemPresence value.
+// Used in the directory row to show "On Queue" / "Meal" / etc. instead
+// of routing-status strings like "OFF_QUEUE".
+function formatPresenceName(raw) {
+  const s = (raw || "").toString().toUpperCase().replace(/[\s_-]/g, "");
+  return ({
+    AVAILABLE: "Available", BUSY: "Busy", AWAY: "Away", OFFLINE: "Offline",
+    IDLE: "Idle", ONQUEUE: "On Queue", MEAL: "Meal", TRAINING: "Training",
+    MEETING: "Meeting", BREAK: "Break", UNKNOWN: "Unknown"
+  })[s] || "—";
 }
 
 // ================================================================
@@ -1489,9 +1514,11 @@ async function resolveQueue(id) {
 async function resolveUser(id) {
   const u = await apiFetch(`/api/v2/users/${id}?expand=presence,routingStatus`);
   const existing = usersById.get(id) || {};
+  const rawP = u.presence?.presenceDefinition?.systemPresence || "";
   usersById.set(id, {
     ...existing, id, name: u.name,
-    presence: mapPresence(u.presence?.presenceDefinition?.systemPresence || ""),
+    presence: mapPresence(rawP),
+    presenceRaw: rawP || existing.presenceRaw || "",
     routingStatus: u.routingStatus?.status || existing.routingStatus || ""
   });
   return u;
@@ -1504,9 +1531,11 @@ async function fetchCurrentUser() {
     station: station?.name || "",
     stationType: station?.type || ""    // inin_webrtc_softphone, inin_physical, inin_remote, etc.
   };
+  const rawP = me.presence?.presenceDefinition?.systemPresence || "";
   usersById.set(me.id, {
     id: me.id, name: me.name,
-    presence: mapPresence(me.presence?.presenceDefinition?.systemPresence || ""),
+    presence: mapPresence(rawP),
+    presenceRaw: rawP,
     routingStatus: me.routingStatus?.status || ""
   });
 }
@@ -1665,9 +1694,11 @@ async function fetchQueueMembers(queueId) {
     const ids = new Set();
     for (const m of r.entities || []) {
       ids.add(m.id);
+      const rawP = m.presence?.presenceDefinition?.systemPresence || "";
       usersById.set(m.id, {
         id: m.id, name: m.name,
-        presence: mapPresence(m.presence?.presenceDefinition?.systemPresence || ""),
+        presence: mapPresence(rawP),
+        presenceRaw: rawP,
         routingStatus: m.routingStatus?.status || ""
       });
     }
@@ -1991,17 +2022,24 @@ function renderStats() {
 // ================================================================
 let dirActiveTab = "agents";            // agents | dialer
 const dirSelectedUsers = new Set();     // userIds checked in Agents tab
+let dirAgentsFilter = "";               // search string for Agents tab
 
 function renderDirectory() {
-  // Normalize in case something external set it to an unexpected value
   if (dirActiveTab !== "agents" && dirActiveTab !== "dialer") dirActiveTab = "agents";
   // Tab highlight
   document.querySelectorAll(".dir-tab[data-dir-tab]").forEach(t => {
     t.classList.toggle("active", t.dataset.dirTab === dirActiveTab);
   });
-  // Sort dropdown is only meaningful on Agents tab
+  // Agents-only header controls (sort dropdown + search) hide on Dialer tab.
+  const agentsTab = dirActiveTab === "agents";
   const sortSel = el("dirSort");
-  if (sortSel) sortSel.style.display = dirActiveTab === "agents" ? "" : "none";
+  const searchWrap = el("dirSearchWrap");
+  const countEl = el("dirCount");
+  if (sortSel)    sortSel.style.display    = agentsTab ? "" : "none";
+  if (searchWrap) searchWrap.style.display = agentsTab ? "inline-flex" : "none";
+  // Count shown on Dialer tab (number of saved groups) but hidden on Agents
+  // tab per user spec.
+  if (countEl) countEl.style.display = agentsTab ? "none" : "";
   if (dirActiveTab === "dialer") renderDirectoryDialerGroups();
   else                           renderDirectoryAgents();
 }
@@ -2023,10 +2061,12 @@ function renderDirectoryAgents() {
   // Prune selections that aren't in the current member set
   for (const uid of [...dirSelectedUsers]) if (!union.has(uid)) dirSelectedUsers.delete(uid);
 
-  const presenceRank = { available: 0, busy: 1, meeting: 2, away: 3, offline: 4 };
+  const presenceRank = { available: 0, onqueue: 1, busy: 2, away: 3, offline: 4 };
   const routingRank  = { idle: 0, interacting: 1, communicating: 2, not_responding: 3, off_queue: 4, "": 5 };
   const nameOf = m => (m.name || m.id || "").toLowerCase();
-  const members = [...union].map(id => usersById.get(id) || { id, name: id });
+  const filter = dirAgentsFilter.trim().toLowerCase();
+  let members = [...union].map(id => usersById.get(id) || { id, name: id });
+  if (filter) members = members.filter(m => nameOf(m).includes(filter));
   members.sort((a, b) => {
     if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
     if (dirSortMode === "presence") {
@@ -2049,14 +2089,14 @@ function renderDirectoryAgents() {
 
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
-    const r = m.routingStatus ? ` · ${m.routingStatus}` : "";
+    const presenceLabel = formatPresenceName(m.presenceRaw);
     const sel = selectedDirUserId === m.id ? " selected" : "";
     const checked = dirSelectedUsers.has(m.id) ? "checked" : "";
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}">
       <input type="checkbox" class="dir-check" data-uid-cb="${escape(m.id)}" ${checked} style="margin-right:4px" />
-      <span class="p-dot ${p}" title="${escape(p)}"></span>
+      <span class="p-dot ${p}" title="${escape(presenceLabel)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
-      <span class="rstatus">${escape(r)}</span>
+      <span class="rstatus">${presenceLabel !== "—" ? "· " + escape(presenceLabel) : ""}</span>
     </div>`;
   }).join("");
 
@@ -2128,7 +2168,9 @@ function renderMyPresence() {
   el("sbUser").textContent = currentUser.name || "—";
   const p = u.presence || "offline";
   el("sbPresenceDot").className = `p-dot ${p}`;
-  el("sbPresence").textContent = p.charAt(0).toUpperCase() + p.slice(1);
+  el("sbPresence").textContent = formatPresenceName(u.presenceRaw) !== "—"
+    ? formatPresenceName(u.presenceRaw)
+    : (p.charAt(0).toUpperCase() + p.slice(1));
   el("sbRouting").textContent = "Routing: " + (u.routingStatus || "—");
 
   // Station: show name + type (WebRTC vs physical vs remote)
@@ -3180,6 +3222,12 @@ function wireDirectory() {
   // Tab clicks (Agents / Dialer Groups)
   document.querySelectorAll(".dir-tab[data-dir-tab]").forEach(t => {
     t.addEventListener("click", () => { dirActiveTab = t.dataset.dirTab; renderDirectory(); });
+  });
+  // Agent name search
+  const srch = el("dirSearch");
+  if (srch) srch.addEventListener("input", () => {
+    dirAgentsFilter = srch.value;
+    renderDirectory();
   });
   // Conference N button — rings every selected user into one ad-hoc conference
   const btn = el("dirConfBtn");
