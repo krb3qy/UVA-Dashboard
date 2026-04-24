@@ -2042,6 +2042,7 @@ function renderDirectoryAgents() {
     return nameOf(a).localeCompare(nameOf(b));
   });
   el("dirCount").textContent = members.length;
+  const sortSel = el("dirSort");
   if (sortSel) sortSel.value = dirSortMode;
 
   body.innerHTML = members.map(m => {
