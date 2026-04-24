@@ -1911,42 +1911,54 @@ function renderToolbar() {
 // ================================================================
 //  Stats sidebar
 // ================================================================
-// Normalize any shape of observation payload into a flat { key: number } map.
-// Breakdown metrics (oUserRoutingStatuses, oUserPresences) have per-entry
-// `qualifier` fields (IDLE / INTERACTING / NOT_RESPONDING / OFF_QUEUE for
-// routing status; system presences for oUserPresences). We preserve the
-// qualifier by keying the output as `metric_qualifier` so they don't
-// collapse into a single value.
+// Normalize the observations-query response into a flat { key: number } map.
+// Verified against a live API response (saved at _work/obs_result.json).
+// Shape:
+//   { results: [ { group: {queueId, mediaType?}, data: [ {metric, qualifier?, stats: {count}, observations?} ] }, … ] }
+//
+// Key subtleties:
+// - Response splits into SEVERAL groups per queue, one per mediaType
+//   (voice, chat, email, callback, message, video) plus ONE aggregate
+//   group without mediaType for user-level metrics. For a voice dashboard
+//   we only want: mediaType === "voice" (call-state metrics) AND the
+//   no-mediaType group (user-level metrics). Other media types return
+//   zeros that would overwrite the voice values if we processed them.
+// - Breakdown metrics (oUserRoutingStatuses, oUserPresences, oOnQueueUsers,
+//   oOffQueueUsers) come with qualifier fields. Preserve each qualifier
+//   separately using keys like `oOnQueueUsers_INTERACTING` so renderStats
+//   can sum them when it wants a total.
 function flattenObservationEvent(body) {
   const out = {};
-  const extract = (metric, qualifier, stats, obsArr) => {
+  const addValue = (metric, qualifier, stats, obsArr) => {
     if (!metric) return;
     let v = null;
-    if (stats) {
-      v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
-    }
-    // If no stats number but observations[] present, count of rows is the value.
+    if (stats) v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
     if (v === null && Array.isArray(obsArr)) v = obsArr.length;
     if (typeof v !== "number") return;
     const key = qualifier ? `${metric}_${qualifier}` : metric;
-    out[key] = v;
+    out[key] = (out[key] || 0) + v;  // sum if same key appears in multiple groups
   };
-  const visit = (x) => {
-    if (!x) return;
-    if (Array.isArray(x)) { for (const it of x) visit(it); return; }
-    if (typeof x === "object") {
-      if (x.metric) extract(x.metric, x.qualifier, x.stats, x.observations);
-      if (Array.isArray(x.metrics)) visit(x.metrics);
-      if (Array.isArray(x.data)) visit(x.data);
-      if (Array.isArray(x.results)) visit(x.results);
-      if (Array.isArray(x.observations)) visit(x.observations);
-      // Flat object fallback: { oWaiting: 5 }
-      for (const [k, v] of Object.entries(x)) {
-        if (/^[no][A-Z]/.test(k) && typeof v === "number") out[k] = v;
-      }
+  const results = body?.results;
+  if (Array.isArray(results)) {
+    for (const r of results) {
+      const mediaType = r.group?.mediaType;
+      if (mediaType && mediaType !== "voice") continue;
+      for (const d of r.data || []) addValue(d.metric, d.qualifier, d.stats, d.observations);
     }
-  };
-  visit(body);
+  } else {
+    // Fallback: WS notification bodies sometimes aren't wrapped in results.
+    const visit = (x) => {
+      if (!x) return;
+      if (Array.isArray(x)) { for (const it of x) visit(it); return; }
+      if (typeof x === "object") {
+        if (x.metric) addValue(x.metric, x.qualifier, x.stats, x.observations);
+        if (Array.isArray(x.metrics)) visit(x.metrics);
+        if (Array.isArray(x.data)) visit(x.data);
+        if (Array.isArray(x.observations)) visit(x.observations);
+      }
+    };
+    visit(body);
+  }
   return out;
 }
 
@@ -2018,19 +2030,41 @@ function renderStats() {
     "oUserRoutingStatuses_OFF_QUEUE"
   ]);
 
+  // oOnQueueUsers / oOffQueueUsers come back qualifier-split (one row per
+  // routing status or presence id). Summing all `metric_*` keys gives the
+  // true total.
+  const sumPrefix = (prefix) => {
+    let total = 0, seen = false;
+    for (const [k, v] of Object.entries(s)) {
+      if ((k === prefix || k.startsWith(prefix + "_")) && typeof v === "number") {
+        total += v; seen = true;
+      }
+    }
+    return seen ? total : null;
+  };
+
   const metricValue = (mkey) => {
     if (typeof s[mkey] === "number") return s[mkey];
+    if (mkey === "oOnQueueUsers" || mkey === "oOffQueueUsers") {
+      const t = sumPrefix(mkey);
+      if (t !== null) return t;
+    }
     if (ZERO_IF_MISSING.has(mkey)) return 0;
     return "—";
   };
 
+  // Naming note: these are ROUTING STATUS counts (GC's ACD routing state
+  // per user), NOT presence counts. A user with presence "Available" but
+  // who hasn't joined the queue is Off Queue here — not Ready. That's
+  // different from the green-dot "Available" count you see by eye in the
+  // Directory panel (that's presence, the user's chosen status).
   const groups = [
-    { key: "agents", title: "Agents", items: [
-      ["Logged On",      "oOnQueueUsers"],
-      ["Available (Idle)","oUserRoutingStatuses_IDLE"],
-      ["Interacting",    "oUserRoutingStatuses_INTERACTING"],
-      ["Not Responding", "oUserRoutingStatuses_NOT_RESPONDING"],
-      ["Off Queue",      "oOffQueueUsers"]
+    { key: "agents", title: "Agents (routing status)", items: [
+      ["On Queue (total)", "oOnQueueUsers"],
+      ["Ready",            "oUserRoutingStatuses_IDLE"],
+      ["On a Call",        "oUserRoutingStatuses_INTERACTING"],
+      ["Not Responding",   "oUserRoutingStatuses_NOT_RESPONDING"],
+      ["Off Queue",        "oOffQueueUsers"]
     ]},
     { key: "waiting", title: "Interactions in queue", items: [
       ["Waiting",          "oWaiting"],
