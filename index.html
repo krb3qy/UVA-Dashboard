@@ -11,11 +11,11 @@
        listview, blue row selection, classic menubar/toolbar/statusbar.
        ========================================================== */
     :root {
-      --win-bg: #ece9d8;
+      --win-bg: #f0f0f0;
       --win-panel: #ffffff;
       --win-panel-head: linear-gradient(to bottom, #f0f4fa, #cad3e5);
       --win-border: #a0a0a0;
-      --win-border-soft: #d4d0c8;
+      --win-border-soft: #dfdfdf;
       --win-text: #000000;
       --win-muted: #555555;
       --win-accent: #316ac5;
@@ -230,7 +230,7 @@
     .dir-row.selected .rstatus { color: #c0d6ff; }
 
     /* -------- Status bar (now at top, PureConnect-style header) -------- */
-    .statusbar { display: flex; align-items: center; padding: 2px 0; background: #ece9d8;
+    .statusbar { display: flex; align-items: center; padding: 2px 0; background: var(--win-bg);
       border-bottom: 1px solid var(--win-border-soft); font-size: 11px; color: var(--win-muted);
       height: 24px; flex: 0 0 24px; }
     .statusbar .chunk { padding: 0 8px; border-right: 1px solid var(--win-border-soft);
@@ -358,17 +358,6 @@
         <div class="mi disabled">Manage Workspaces…</div>
       </div>
     </div>
-    <div class="item" data-menu="tools">Tools
-      <div class="menu-dropdown">
-        <div class="mi" data-cmd="settings">Settings…</div>
-        <div class="mi" data-cmd="reload">Reconnect</div>
-      </div>
-    </div>
-    <div class="item" data-menu="options">Options
-      <div class="menu-dropdown">
-        <div class="mi" data-cmd="settings">Configuration…</div>
-      </div>
-    </div>
     <div class="item" data-menu="actions">Actions
       <div class="menu-dropdown">
         <div class="mi" data-cmd="confDialer">Conference Dialer…</div>
@@ -385,8 +374,7 @@
     </div>
     <div class="item" data-menu="help">Help
       <div class="menu-dropdown">
-        <div class="mi" data-cmd="helpSearch">Search Help Center…</div>
-        <div class="mi" data-cmd="helpCenter">Open Help Center</div>
+        <div class="mi" data-cmd="userGuide">User Guide</div>
         <div class="sep"></div>
         <div class="mi" data-cmd="about">About UVA Dashboard</div>
       </div>
@@ -531,17 +519,13 @@
       <svg viewBox="0 0 16 16"><path fill="#069" d="M1 5h10l-3-3 1-1 5 5-5 5-1-1 3-3H1V5zm0 6h8v2H1v-2z"/></svg>
       <span class="lbl">Consult</span>
     </button>
-    <button class="tbtn" data-act="voicemail" title="Send to voicemail">
-      <svg viewBox="0 0 16 16"><circle cx="4" cy="10" r="3" fill="none" stroke="#000"/><circle cx="12" cy="10" r="3" fill="none" stroke="#000"/><path stroke="#000" d="M4 10h8"/></svg>
-      <span class="lbl">Voicemail</span>
-    </button>
     <button class="tbtn" data-act="disconnect" title="Disconnect (Ctrl+D)">
       <svg viewBox="0 0 16 16"><path fill="#c00" d="M3 7c3-4 7-4 10 0l-2 2a3 3 0 0 0-2-1v2l-2 1-2-1V8a3 3 0 0 0-2 1L3 7z" transform="rotate(135 8 8)"/></svg>
       <span class="lbl">Disconnect</span>
     </button>
     <span class="sep"></span>
     <button class="tbtn" data-act="barge" title="Join / Barge into call (supervisor)">
-      <svg viewBox="0 0 16 16"><path fill="#060" d="M5 2h2v5h5v2H7v5H5V9H0V7h5V2zm8 0h2v12h-2V2z"/></svg>
+      <svg viewBox="0 0 16 16"><path fill="#060" d="M7 2h2v5h5v2H9v5H7V9H2V7h5z"/></svg>
       <span class="lbl">Join</span>
     </button>
     <button class="tbtn" data-act="listen" title="Silent monitor (supervisor)">
@@ -551,15 +535,6 @@
     <button class="tbtn" data-act="coach" title="Coach / whisper (supervisor)">
       <svg viewBox="0 0 16 16"><path fill="#606" d="M3 3h10l-1 6H5l-1-2H2V5h2l-1-2zm2 8a2 2 0 1 0 2 2h-2v-2z"/></svg>
       <span class="lbl">Coach</span>
-    </button>
-    <span class="sep"></span>
-    <button class="tbtn" data-act="record" title="Start / stop recording">
-      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#c00"/></svg>
-      <span class="lbl">Record</span>
-    </button>
-    <button class="tbtn" data-act="wrapup" title="Wrap-up code">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M2 3h12v10H2V3zm1 2v7h10V5H3zm2 1h6v1H5V6zm0 2h6v1H5V8zm0 2h4v1H5v-1z"/></svg>
-      <span class="lbl">Wrap-up</span>
     </button>
     <span class="sep"></span>
     <button class="tbtn" data-act="merge" title="Merge selected calls into conference">
@@ -582,10 +557,6 @@
       <span class="lbl">Conference</span>
     </button>
     <span class="sp"></span>
-    <button class="tbtn" data-act="settings" title="Settings">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6 3l-1.3-.3-.3-.8.7-1.2-1.2-1.2-1.2.7-.8-.3L9.5 4h-3l-.3 1.3-.8.3-1.2-.7-1.2 1.2.7 1.2-.3.8L2 8v2l1.3.3.3.8-.7 1.2 1.2 1.2 1.2-.7.8.3L6.5 14h3l.3-1.3.8-.3 1.2.7 1.2-1.2-.7-1.2.3-.8L14 9V8z"/></svg>
-      <span class="lbl">Settings</span>
-    </button>
     <button class="tbtn" data-act="popout" title="Pop out / Pop in" id="popoutBtn">
       <svg viewBox="0 0 16 16"><path fill="none" stroke="#000" d="M2 2h7v2M9 2v5H2V2zm5 5V2h-5l2 2-4 4 1 1 4-4 2 2z"/></svg>
       <span class="lbl">Pop Out</span>
@@ -801,20 +772,65 @@
   </div>
 </div>
 
-<!-- HELP SEARCH MODAL -->
-<div id="helpSearchModal" class="modal-backdrop">
-  <div class="modal">
-    <div class="titlebar"><span>Search Help Center</span><span class="sp"></span><span class="x" data-close>✕</span></div>
-    <div class="body">
-      <label>What are you looking for?</label>
-      <input type="text" id="helpQuery" placeholder="e.g. how to transfer a call" />
-      <div style="margin-top:6px;font-size:11px;color:var(--win-muted)">
-        Opens the Genesys Cloud help center in a new tab filtered by your query.
-      </div>
+<!-- USER GUIDE MODAL -->
+<div id="userGuideModal" class="modal-backdrop">
+  <div class="modal" style="min-width:640px;max-width:820px">
+    <div class="titlebar"><span>User Guide</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body" style="font-size:12px;line-height:1.5">
+      <h3 style="margin:0 0 6px 0;font-size:13px">Queue Tabs</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Each tab watches one or more queues. Click <strong>+ Queue</strong> to open Settings and add queues.</li>
+        <li>Right-click a tab to <strong>Edit queues</strong>, <strong>Rename</strong>, or <strong>Remove</strong> it.</li>
+        <li>Groups (2+ queues in one tab) show a blue bar on the left. Hover for the full member list.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">My Interactions / Call History</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li><strong>My Interactions</strong>: live calls you're on. Select a row, then use the bottom toolbar for Pickup / Hold / Mute / Transfer / etc.</li>
+        <li><strong>Call History</strong>: last 14 days of your conversations.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Queue Panel</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Shows every live call in the active tab's queue(s).</li>
+        <li>Right-click any column header to show/hide columns for that queue.</li>
+        <li>Drag a row onto another row to merge the two calls into a conference.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Workgroup Statistics</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Aggregated across every queue in the active tab (users summed, longest-wait maxed).</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Directory</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Members of the active tab's queues, sortable by name / presence / routing status.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Conference Dialer</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Toolbar button or <strong>Actions &gt; Conference Dialer</strong>. Add numbers, save a group, click <strong>Bridge All</strong>.</li>
+        <li>Outbound CID defaults to your personal line; pick a queue to present that queue's number instead.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Emergency Alert</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Set the <strong>Emergency queue</strong> in Preferences. When a call enters that queue, a red flashing banner + tone fires.</li>
+        <li><strong>Alerts</strong> status-bar chunk cycles modes (auto / dashboard / extension / both / off).</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Workspaces</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Save your current layout (tabs, columns, splitter sizes, sidebar state) via <strong>Workspaces &gt; Manage Workspaces</strong>. Switch layouts from the Workspaces menu.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Popout</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li>Toolbar <strong>Pop Out</strong> opens the dashboard in its own window. Token carries over via localStorage.</li>
+      </ul>
     </div>
     <div class="actions">
-      <button class="btn" data-close>Cancel</button>
-      <button class="btn btn-primary" id="helpGo">Search</button>
+      <button class="btn btn-primary" data-close>Got it</button>
     </div>
   </div>
 </div>
@@ -1326,14 +1342,27 @@ function handleNotification(msg) {
   }
 }
 
+// Map every valid GC systemPresence enum value to one of our 5 css color
+// buckets. Enum per swagger: UNKNOWN, AVAILABLE, AWAY, BUSY, OFFLINE,
+// IDLE, ON_QUEUE, MEAL, TRAINING, MEETING, BREAK. ON_QUEUE / IDLE map to
+// "busy" because the agent is in active ACD routing — not idle-available.
 function mapPresence(sys) {
-  const s = (sys || "").toLowerCase();
-  if (s.includes("available")) return "available";
-  if (s.includes("busy") || s.includes("onqueue")) return "busy";
-  if (s.includes("away") || s.includes("break")) return "away";
-  if (s.includes("meeting")) return "meeting";
-  if (!s || s.includes("offline")) return "offline";
-  return "offline";
+  const s = (sys || "").toString().toUpperCase().replace(/[\s_-]/g, "");
+  switch (s) {
+    case "AVAILABLE":                          return "available";
+    case "BUSY":
+    case "ONQUEUE":
+    case "IDLE":                               return "busy";
+    case "AWAY":
+    case "BREAK":
+    case "MEAL":
+    case "TRAINING":                           return "away";
+    case "MEETING":                            return "meeting";
+    case "OFFLINE":
+    case "UNKNOWN":
+    case "":                                   return "offline";
+    default:                                   return "offline";
+  }
 }
 
 // ================================================================
@@ -2832,8 +2861,7 @@ function handleMenuCmd(cmd) {
     case "confDialer": openConfDialerModal(); break;
     case "sendSms": openSmsModal(); break;
     case "manageWorkspaces": openWorkspacesModal(); break;
-    case "helpSearch": openHelpSearchModal(); break;
-    case "helpCenter": openHelpCenter(); break;
+    case "userGuide": openModal("userGuideModal"); break;
     case "logout": clearAuth(); location.reload(); break;
     case "settings": openSettings(); break;
     case "toggleSidebar": toggleRightCol(); break;
@@ -2972,18 +3000,7 @@ function wireRowSelection() {
 function showTabContextMenu(x, y, tabId) {
   const tab = queueTabs.find(t => t.id === tabId); if (!tab) return;
   const menu = el("ctxMenu");
-  const label = tab.name || (tab.queueIds.length === 1
-    ? (queuesById.get(tab.queueIds[0])?.name || tab.queueIds[0])
-    : `Group (${tab.queueIds.length})`);
-  const divName = tab.divisionId ? (divisionsById.get(tab.divisionId)?.name || tab.divisionId) : "";
-  const header = `<div class="item disabled" style="font-weight:600">${escape(label)}${divName ? ` · div: ${escape(divName)}` : ""}</div>`;
-  const queuesSection = tab.queueIds.length === 0
-    ? `<div class="item disabled" style="font-style:italic;color:var(--win-muted)">(no queues)</div>`
-    : tab.queueIds.map(qid => {
-        const qn = queuesById.get(qid)?.name || qid;
-        return `<div class="item disabled" style="padding-left:26px;color:#333">${escape(qn)}</div>`;
-      }).join("");
-  menu.innerHTML = header + `<div class="sep"></div>` + queuesSection + `<div class="sep"></div>` +
+  menu.innerHTML =
     `<div class="item" data-tab-act="edit">Edit queues…</div>` +
     `<div class="item" data-tab-act="rename">Rename tab…</div>` +
     `<div class="sep"></div>` +
@@ -3572,22 +3589,6 @@ function renderWorkspacesMenu() {
 }
 
 // ================================================================
-//  HELP CENTER SEARCH
-// ================================================================
-function openHelpSearchModal() {
-  openModal("helpSearchModal");
-  el("helpQuery").value = "";
-  el("helpQuery").focus();
-  el("helpGo").onclick = () => {
-    const q = el("helpQuery").value.trim();
-    const u = q ? `https://help.mypurecloud.com/?s=${encodeURIComponent(q)}` : "https://help.mypurecloud.com/";
-    window.open(u, "_blank", "noopener");
-    closeModal("helpSearchModal");
-  };
-}
-function openHelpCenter() { window.open("https://help.mypurecloud.com/", "_blank", "noopener"); }
-
-// ================================================================
 //  EMERGENCY QUEUE ALERT (dashboard-internal, works in desktop-app)
 // ================================================================
 // Three components:
@@ -3721,10 +3722,14 @@ async function openAcdStatusMenu(x, y) {
     menu.querySelectorAll("[data-presence-id]").forEach(n => n.onclick = async () => {
       menu.classList.remove("active");
       try {
-        // Endpoint is case-sensitive: /presences/purecloud (lowercase) per SDK docs.
+        // Endpoint is case-sensitive: /presences/purecloud (lowercase) per SDK.
+        // MutableUserPresence accepts { presenceDefinition, message } —
+        // the message becomes the status note users see in GC UI.
+        const body = { presenceDefinition: { id: n.dataset.presenceId } };
+        if (statusNoteText) body.message = statusNoteText;
         await apiFetch(`/api/v2/users/${currentUser.id}/presences/purecloud`, {
           method: "PATCH",
-          body: { presenceDefinition: { id: n.dataset.presenceId } }
+          body
         });
       } catch (e) { showBanner({ type: "error", title: "Presence change failed", message: e.message, autoHideMs: 4000 }); }
     });
