@@ -2035,13 +2035,19 @@ function renderStats() {
     const set = queueMembers.get(q);
     if (set) for (const uid of set) memberIds.add(uid);
   }
-  // Unique agents handling active calls that sit in this tab's queues.
-  const agentsOnTabCalls = new Set();
+  // Count connected calls in this tab's queues. Each connected call = one
+  // agent handling it. Previously we tried to dedupe unique assignedUserId
+  // across conversations, but placeholder rows from the observation seed
+  // don't have assignedUserId populated until the per-conversation upgrade
+  // GET completes — so when the upgrade lagged or failed silently, this
+  // showed 0 even with 7 active calls in the queue. Counting the conv
+  // rows directly is both more reliable and what the user actually wants
+  // ("how many calls are being handled right now in this tab").
+  let onCall = 0;
   for (const conv of conversations.values()) {
     if (conv.disconnected) continue;
     if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
-    if (conv.stateKey !== "connected") continue;
-    if (conv.assignedUserId) agentsOnTabCalls.add(conv.assignedUserId);
+    if (conv.stateKey === "connected") onCall++;
   }
   let onQueue = 0, notResp = 0, offQueue = 0;
   for (const uid of memberIds) {
@@ -2052,7 +2058,6 @@ function renderStats() {
       if (rs === "NOT_RESPONDING") notResp++;
     }
   }
-  const onCall = agentsOnTabCalls.size;
 
   const ZERO_IF_MISSING = new Set([
     "oWaiting", "oAlerting", "oInteracting"
