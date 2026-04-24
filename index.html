@@ -546,6 +546,17 @@
       <svg viewBox="0 0 16 16"><path fill="#000" d="M3 3c0-.6.4-1 1-1h2.3l1.4 3.5-1.8 1.1a10 10 0 0 0 4.5 4.5l1.1-1.8L15 10.7V13c0 .6-.4 1-1 1C7 14 2 9 2 2c0-.6.4-1 1-1h0z"/></svg>
       <span class="lbl">Make Call</span>
     </button>
+    <button class="tbtn" data-act="confDialer" title="Conference Dialer (saved speed-dial groups)">
+      <svg viewBox="0 0 16 16">
+        <circle cx="4" cy="5" r="1.8" fill="#036"/>
+        <circle cx="12" cy="5" r="1.8" fill="#036"/>
+        <circle cx="8" cy="3.5" r="1.8" fill="#036"/>
+        <path fill="#036" d="M1.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H1.5z"/>
+        <path fill="#036" d="M9.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H9.5z"/>
+        <path fill="#036" d="M5.5 11c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1.5h-5z"/>
+      </svg>
+      <span class="lbl">Conference</span>
+    </button>
     <span class="sep"></span>
     <button class="tbtn" data-act="pickup" title="Pick Up selected queue call">
       <svg viewBox="0 0 16 16"><path fill="#080" d="M8 1v7l3-3 1 1-5 5-5-5 1-1 3 3V1h2zm-6 12h12v2H2z"/></svg>
@@ -593,17 +604,6 @@
     <button class="tbtn" data-act="addParty" title="Add number to current call / conference">
       <svg viewBox="0 0 16 16"><path fill="#060" d="M10 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM4 9h12v2H4V9zm-3 0v2H0V9h1zm12-2v2h-1V7h1z"/><path fill="#060" d="M3 12h2v4H3v-4zm-2 2v-1H0v-1h1v-1h1v1h1v1H2v1H1z"/></svg>
       <span class="lbl">Add Party</span>
-    </button>
-    <button class="tbtn" data-act="confDialer" title="Conference Dialer (saved speed-dial groups)">
-      <svg viewBox="0 0 16 16">
-        <circle cx="4" cy="5" r="1.8" fill="#036"/>
-        <circle cx="12" cy="5" r="1.8" fill="#036"/>
-        <circle cx="8" cy="3.5" r="1.8" fill="#036"/>
-        <path fill="#036" d="M1.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H1.5z"/>
-        <path fill="#036" d="M9.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H9.5z"/>
-        <path fill="#036" d="M5.5 11c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1.5h-5z"/>
-      </svg>
-      <span class="lbl">Conference</span>
     </button>
     <span class="sp"></span>
     <button class="tbtn" data-act="popout" title="Pop out / Pop in" id="popoutBtn">
@@ -4036,14 +4036,20 @@ function toggleAlertMode() {
 async function openAcdStatusMenu(x, y) {
   try {
     const r = await apiFetch("/api/v2/presencedefinitions?pageSize=100");
-    // Filter to canonical system presences + active org-level ones.
-    // Skip "Offline" and disabled/deleted definitions to match GC UI behavior.
-    const ORDER = ["Available", "Busy", "Away", "Break", "Meal", "Meeting", "Training", "On Queue"];
+    // Filter: skip deactivated; skip OFFLINE (GC sets it automatically);
+    // skip IDLE (system-set via inactivity timer — not user-selectable,
+    // matches native GC UI behavior).
+    // Sort order uses the raw systemPresence enum values (uppercase +
+    // underscores) so indexOf matches; previous version compared against
+    // title-case strings that never matched, falling through to alpha.
+    const ORDER = ["AVAILABLE", "BUSY", "AWAY", "BREAK", "MEAL", "MEETING", "TRAINING", "ON_QUEUE"];
+    const SKIP = new Set(["OFFLINE", "IDLE", "UNKNOWN"]);
     const defs = (r?.entities || [])
       .filter(d => !d.deactivated)
-      .filter(d => (d.systemPresence || "").toLowerCase() !== "offline")
+      .filter(d => !SKIP.has((d.systemPresence || "").toUpperCase()))
       .sort((a, b) => {
-        const ai = ORDER.indexOf(a.systemPresence); const bi = ORDER.indexOf(b.systemPresence);
+        const ai = ORDER.indexOf((a.systemPresence || "").toUpperCase());
+        const bi = ORDER.indexOf((b.systemPresence || "").toUpperCase());
         if (ai >= 0 && bi >= 0) return ai - bi;
         if (ai >= 0) return -1; if (bi >= 0) return 1;
         return (a.systemPresence || "").localeCompare(b.systemPresence || "");
