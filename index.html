@@ -1708,10 +1708,11 @@ const seedQueueCalls = pollQueue;
 async function fetchQueueMembers(queueId) {
   try {
     const ids = new Set();
-    let page = 1;
+    let page = 1, total = 0;
     while (true) {
       const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&pageNumber=${page}&expand=presence,routingStatus`);
       const entities = r.entities || [];
+      total = r.total || 0;
       for (const m of entities) {
         ids.add(m.id);
         const rawP = m.presence?.presenceDefinition?.systemPresence || "";
@@ -1722,23 +1723,29 @@ async function fetchQueueMembers(queueId) {
           routingStatus: m.routingStatus?.status || ""
         });
       }
-      // Stop when we've pulled every page the API says exists. Fall back to
-      // a short-read check (entities < pageSize) for servers that don't
-      // return pageCount. Safety cap at 50 pages = 5000 members.
-      const pageCount = r.pageCount;
+      // Triple-redundant stop conditions because GC's entity-listing
+      // responses aren't uniform across endpoints: prefer nextUri as
+      // the authoritative signal, fall back to pageCount, finally to
+      // short-read.
+      if (!r.nextUri) break;
+      const pageCount = r.pageCount || 0;
       if (pageCount && page >= pageCount) break;
       if (entities.length < 100) break;
       page++;
       if (page > 50) { console.warn("queue members: capped at 50 pages", queueId); break; }
     }
     queueMembers.set(queueId, ids);
+    console.log(`[queue members] ${queueId}: fetched ${ids.size} of ${total || "?"} members across ${page} page(s)`);
   } catch (e) { console.warn("queue members", queueId, e); }
 }
 
 // Fetch members for every queue in the active tab in parallel.
-// Re-renders the directory once all promises settle.
+// Always re-fetches (no cache skip) — membership changes over time and
+// the previous skip-if-cached was masking stale data when pagination
+// was broken. Per-queue fetch is one HTTP roundtrip per page (usually
+// 1-2 pages), and this only fires on tab change / init — not hot.
 async function fetchActiveTabMembers() {
-  const qids = activeTabQueueIds().filter(q => !queueMembers.has(q));
+  const qids = activeTabQueueIds();
   if (qids.length === 0) { renderDirectory(); return; }
   await Promise.allSettled(qids.map(q => fetchQueueMembers(q)));
   renderDirectory();
