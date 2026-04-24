@@ -2024,25 +2024,35 @@ function renderStats() {
     }
   }
 
-  // Agent-level counts — derived from the DEDUPED queueMembers union
-  // (same data the Directory panel shows), NOT from observation sums.
-  // The observation counts are per-queue, so an agent who belongs to 3
-  // Pharmacy queues was being counted 3× ("On a Call: 2" when only 1
-  // agent is on a call in the tab). Using the member-id union
-  // guarantees each user is counted once.
+  // Agent-level counts — derived from deduped queueMembers + the
+  // conversations Map. Routing status is GLOBAL per user, so "On a Call"
+  // off the routing status would include agents on calls from queues
+  // NOT in this tab. Scope it to calls actually in this tab's queues
+  // instead. Net effect: 0 calls in the queue panel → 0 On a Call.
+  const tabQids = new Set(qids);
   const memberIds = new Set();
   for (const q of qids) {
     const set = queueMembers.get(q);
     if (set) for (const uid of set) memberIds.add(uid);
   }
-  let onQueue = 0, onCall = 0, notResp = 0, offQueue = 0;
+  // Unique agents handling active calls that sit in this tab's queues.
+  const agentsOnTabCalls = new Set();
+  for (const conv of conversations.values()) {
+    if (conv.disconnected) continue;
+    if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
+    if (conv.stateKey !== "connected") continue;
+    if (conv.assignedUserId) agentsOnTabCalls.add(conv.assignedUserId);
+  }
+  let onQueue = 0, notResp = 0, offQueue = 0;
   for (const uid of memberIds) {
     const rs = (usersById.get(uid)?.routingStatus || "").toUpperCase();
-    if (rs === "INTERACTING")          { onQueue++; onCall++; }
-    else if (rs === "NOT_RESPONDING")  { onQueue++; notResp++; }
-    else if (rs === "IDLE" || rs === "COMMUNICATING") { onQueue++; }
-    else                                offQueue++;   // OFF_QUEUE or unknown
+    if (rs === "OFF_QUEUE" || rs === "") offQueue++;
+    else {
+      onQueue++;
+      if (rs === "NOT_RESPONDING") notResp++;
+    }
   }
+  const onCall = agentsOnTabCalls.size;
 
   const ZERO_IF_MISSING = new Set([
     "oWaiting", "oAlerting", "oInteracting"
