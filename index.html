@@ -2060,11 +2060,10 @@ function renderStats() {
   // Directory panel (that's presence, the user's chosen status).
   const groups = [
     { key: "agents", title: "Agents (routing status)", items: [
-      ["On Queue (total)", "oOnQueueUsers"],
-      ["Ready",            "oUserRoutingStatuses_IDLE"],
-      ["On a Call",        "oUserRoutingStatuses_INTERACTING"],
-      ["Not Responding",   "oUserRoutingStatuses_NOT_RESPONDING"],
-      ["Off Queue",        "oOffQueueUsers"]
+      ["On Queue",       "oOnQueueUsers"],
+      ["On a Call",      "oUserRoutingStatuses_INTERACTING"],
+      ["Not Responding", "oUserRoutingStatuses_NOT_RESPONDING"],
+      ["Off Queue",      "oOffQueueUsers"]
     ]},
     { key: "waiting", title: "Interactions in queue", items: [
       ["Waiting",          "oWaiting"],
