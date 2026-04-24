@@ -2009,6 +2009,10 @@ function renderStats() {
     return;
   }
 
+  // Interactions-in-queue metrics come from the observation response.
+  // Summing oWaiting / oAlerting / oInteracting across queues is correct
+  // because those are per-call counts (a call only sits in one queue).
+  // Longest-wait is maxed across queues.
   const MAX_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
   const s = {};
   for (const q of qids) {
@@ -2020,56 +2024,48 @@ function renderStats() {
     }
   }
 
-  // Metrics that are always counts (if absent from the API response, the
-  // real value is 0 — GC omits zero-count observation metrics entirely).
-  const ZERO_IF_MISSING = new Set([
-    "oOnQueueUsers", "oOffQueueUsers", "oActiveUsers", "oMemberUsers",
-    "oWaiting", "oAlerting", "oInteracting",
-    "oUserRoutingStatuses_IDLE", "oUserRoutingStatuses_INTERACTING",
-    "oUserRoutingStatuses_NOT_RESPONDING", "oUserRoutingStatuses_COMMUNICATING",
-    "oUserRoutingStatuses_OFF_QUEUE"
-  ]);
+  // Agent-level counts — derived from the DEDUPED queueMembers union
+  // (same data the Directory panel shows), NOT from observation sums.
+  // The observation counts are per-queue, so an agent who belongs to 3
+  // Pharmacy queues was being counted 3× ("On a Call: 2" when only 1
+  // agent is on a call in the tab). Using the member-id union
+  // guarantees each user is counted once.
+  const memberIds = new Set();
+  for (const q of qids) {
+    const set = queueMembers.get(q);
+    if (set) for (const uid of set) memberIds.add(uid);
+  }
+  let onQueue = 0, onCall = 0, notResp = 0, offQueue = 0;
+  for (const uid of memberIds) {
+    const rs = (usersById.get(uid)?.routingStatus || "").toUpperCase();
+    if (rs === "INTERACTING")          { onQueue++; onCall++; }
+    else if (rs === "NOT_RESPONDING")  { onQueue++; notResp++; }
+    else if (rs === "IDLE" || rs === "COMMUNICATING") { onQueue++; }
+    else                                offQueue++;   // OFF_QUEUE or unknown
+  }
 
-  // oOnQueueUsers / oOffQueueUsers come back qualifier-split (one row per
-  // routing status or presence id). Summing all `metric_*` keys gives the
-  // true total.
-  const sumPrefix = (prefix) => {
-    let total = 0, seen = false;
-    for (const [k, v] of Object.entries(s)) {
-      if ((k === prefix || k.startsWith(prefix + "_")) && typeof v === "number") {
-        total += v; seen = true;
-      }
-    }
-    return seen ? total : null;
-  };
+  const ZERO_IF_MISSING = new Set([
+    "oWaiting", "oAlerting", "oInteracting"
+  ]);
 
   const metricValue = (mkey) => {
     if (typeof s[mkey] === "number") return s[mkey];
-    if (mkey === "oOnQueueUsers" || mkey === "oOffQueueUsers") {
-      const t = sumPrefix(mkey);
-      if (t !== null) return t;
-    }
     if (ZERO_IF_MISSING.has(mkey)) return 0;
     return "—";
   };
 
-  // Naming note: these are ROUTING STATUS counts (GC's ACD routing state
-  // per user), NOT presence counts. A user with presence "Available" but
-  // who hasn't joined the queue is Off Queue here — not Ready. That's
-  // different from the green-dot "Available" count you see by eye in the
-  // Directory panel (that's presence, the user's chosen status).
   const groups = [
     { key: "agents", title: "Agents (routing status)", items: [
-      ["On Queue",       "oOnQueueUsers"],
-      ["On a Call",      "oUserRoutingStatuses_INTERACTING"],
-      ["Not Responding", "oUserRoutingStatuses_NOT_RESPONDING"],
-      ["Off Queue",      "oOffQueueUsers"]
+      ["On Queue",       onQueue],
+      ["On a Call",      onCall],
+      ["Not Responding", notResp],
+      ["Off Queue",      offQueue]
     ]},
     { key: "waiting", title: "Interactions in queue", items: [
-      ["Waiting",          "oWaiting"],
-      ["Alerting",         "oAlerting"],
-      ["Interacting",      "oInteracting"],
-      ["Longest Wait (s)", "oLongestWaiting"]
+      ["Waiting",          metricValue("oWaiting")],
+      ["Alerting",         metricValue("oAlerting")],
+      ["Interacting",      metricValue("oInteracting")],
+      ["Longest Wait (s)", metricValue("oLongestWaiting")]
     ]}
   ];
 
@@ -2080,8 +2076,8 @@ function renderStats() {
         <span>${escape(g.title)}</span>
       </div>
       <div class="stats-items">
-        ${g.items.map(([label, mkey]) => `
-          <div class="stats-row"><span class="label">${escape(label)}</span><span class="value">${escape(String(metricValue(mkey)))}</span></div>
+        ${g.items.map(([label, value]) => `
+          <div class="stats-row"><span class="label">${escape(label)}</span><span class="value">${escape(String(value))}</span></div>
         `).join("")}
       </div>
     </div>
