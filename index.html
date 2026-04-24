@@ -2101,19 +2101,49 @@ function renderDirectoryAgents() {
   const bucketLabel = { available: "Available", busy: "Busy", away: "Away",
     onqueue: "On Queue", offline: "Offline" };
 
+  // Per-user: which queues (in the active tab) they're a member of.
+  // Used for the row tooltip so you can verify directory scoping.
+  const qNameById = qid => queuesById.get(qid)?.name || qid;
+  const userQueues = new Map();
+  for (const q of qids) {
+    const set = queueMembers.get(q);
+    if (!set) continue;
+    for (const uid of set) {
+      if (!userQueues.has(uid)) userQueues.set(uid, []);
+      userQueues.get(uid).push(qNameById(q));
+    }
+  }
+
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
     const raw = formatPresenceName(m.presenceRaw);
     const label = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
     const sel = selectedDirUserId === m.id ? " selected" : "";
     const checked = dirSelectedUsers.has(m.id) ? "checked" : "";
-    return `<div class="dir-row${sel}" data-uid="${escape(m.id)}">
+    const qlist = (userQueues.get(m.id) || []).join(", ");
+    const tip = `${m.name || m.id}\n${label}${qlist ? `\nMember of: ${qlist}` : ""}`;
+    return `<div class="dir-row${sel}" data-uid="${escape(m.id)}" title="${escape(tip)}">
       <input type="checkbox" class="dir-check" data-uid-cb="${escape(m.id)}" ${checked} style="margin-right:4px" />
       <span class="p-dot ${p}" title="${escape(label)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
       <span class="rstatus">· ${escape(label)}</span>
     </div>`;
   }).join("");
+
+  // Verification probe — prints once per renderDirectoryAgents call. If
+  // what you see in the UI doesn't match this, the bug is downstream of
+  // queueMembers; if this shows members you don't expect, the bug is in
+  // fetchQueueMembers or in the tab's queueIds.
+  try {
+    const probe = {
+      activeTabId,
+      activeTabName: activeTab()?.name || "",
+      queueIds: qids.map(q => ({ id: q, name: qNameById(q), count: queueMembers.get(q)?.size ?? null })),
+      unionSize: union.size,
+      filtered: filter ? members.length : null
+    };
+    console.log("[directory] agents render", probe);
+  } catch {}
 
   body.querySelectorAll(".dir-row").forEach(r => r.addEventListener("click", (e) => {
     // Checkbox clicks shouldn't select the row — they toggle membership
