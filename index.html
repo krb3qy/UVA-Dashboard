@@ -2357,7 +2357,7 @@ async function doAction(act, row) {
   try {
     if (act === "makeCall") { openOutboundModal(); return; }
     if (act === "settings") { openSettings(); return; }
-    if (act === "popout") { /* handled elsewhere */ return; }
+    if (act === "popout") { triggerPopout(); return; }
     if (act === "wrapup") { openWrapupModal(row); return; }
     if (act === "transfer") { openTransferModal(row); return; }
     if (act === "consult") { openConsultModal(row); return; }
