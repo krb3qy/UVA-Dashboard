@@ -1629,6 +1629,15 @@ async function fetchQueueMembers(queueId) {
     queueMembers.set(queueId, ids);
   } catch (e) { console.warn("queue members", e); }
 }
+
+// Fetch members for every queue in the active tab in parallel.
+// Re-renders the directory once all promises settle.
+async function fetchActiveTabMembers() {
+  const qids = activeTabQueueIds().filter(q => !queueMembers.has(q));
+  if (qids.length === 0) { renderDirectory(); return; }
+  await Promise.allSettled(qids.map(q => fetchQueueMembers(q)));
+  renderDirectory();
+}
 async function fetchQueueWrapupCodes(queueId) {
   try {
     const r = await apiFetch(`/api/v2/routing/queues/${queueId}/wrapupcodes?pageSize=100`);
@@ -1937,15 +1946,23 @@ function renderStats() {
 // ================================================================
 function renderDirectory() {
   const body = el("dirBody");
-  const qid = activeTabQueueId;
-  if (!qid) { body.innerHTML = '<div class="empty-msg">Select a queue to load members</div>'; el("dirCount").textContent = "0"; return; }
-  const ids = queueMembers.get(qid);
-  if (!ids) { body.innerHTML = '<div class="empty-msg">Loading members…</div>'; el("dirCount").textContent = "0"; return; }
+  const qids = activeTabQueueIds();
+  if (qids.length === 0) { body.innerHTML = '<div class="empty-msg">Select a queue to load members</div>'; el("dirCount").textContent = "0"; return; }
+
+  // Union of members across every queue in the active tab. A user who
+  // belongs to multiple queues in the tab only appears once.
+  const union = new Set();
+  let anyLoaded = false;
+  for (const q of qids) {
+    const set = queueMembers.get(q);
+    if (set) { anyLoaded = true; for (const id of set) union.add(id); }
+  }
+  if (!anyLoaded) { body.innerHTML = '<div class="empty-msg">Loading members…</div>'; el("dirCount").textContent = "0"; return; }
 
   const presenceRank = { available: 0, busy: 1, meeting: 2, away: 3, offline: 4 };
   const routingRank  = { idle: 0, interacting: 1, communicating: 2, not_responding: 3, off_queue: 4, "": 5 };
   const nameOf = m => (m.name || m.id || "").toLowerCase();
-  const members = [...ids].map(id => usersById.get(id) || { id, name: id });
+  const members = [...union].map(id => usersById.get(id) || { id, name: id });
   members.sort((a, b) => {
     if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
     if (dirSortMode === "presence") {
@@ -2560,7 +2577,7 @@ function renderQueueList(filter) {
       renderTabGroupsSection();
       try { await refreshSubscriptions(); } catch {}
       if (cb.checked) seedQueueCalls(qid).then(renderAll).catch(() => {});
-      if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+      fetchActiveTabMembers();
     });
   });
 }
@@ -2950,7 +2967,7 @@ function wireRowSelection() {
         if (activeTabId === tabId) activeTabId = queueTabs[0]?.id || null;
         refreshDerivedQueueState();
         saveQueueTabs(); renderAll();
-        if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+        fetchActiveTabMembers();
         refreshSubscriptions().catch(() => {});
       } else {
         activeTabId = tab.dataset.tabId;
@@ -2961,7 +2978,7 @@ function wireRowSelection() {
         for (const qid of activeTabQueueIds()) {
           pollQueue(qid).catch(() => {});
         }
-        if (activeTabQueueId && !queueMembers.has(activeTabQueueId)) fetchQueueMembers(activeTabQueueId).then(renderAll);
+        fetchActiveTabMembers();
         refreshSubscriptions().catch(() => {});
         renderAll();
       }
@@ -3529,7 +3546,7 @@ async function applyWorkspace(ws) {
   renderAll();
   try { await refreshSubscriptions(); } catch {}
   for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
-  if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+  fetchActiveTabMembers();
 }
 function openWorkspacesModal() {
   openModal("workspacesModal");
@@ -3802,7 +3819,7 @@ async function init() {
     selectedQueueIds.forEach((qid, i) => {
       setTimeout(() => pollQueue(qid).catch(() => {}), i * 250);
     });
-    if (activeTabQueueId) fetchQueueMembers(activeTabQueueId).then(renderAll);
+    fetchActiveTabMembers();
     startQueuePoll();
     // Preload call history so the tab count isn't a misleading 0 before first click.
     fetchCallHistory().catch(() => {});
