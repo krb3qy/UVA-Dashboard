@@ -533,7 +533,6 @@
               <option value="name-asc">Name A→Z</option>
               <option value="name-desc">Name Z→A</option>
               <option value="presence">Presence</option>
-              <option value="routing">Routing Status</option>
             </select>
           </div>
         </div>
@@ -2107,8 +2106,9 @@ function renderDirectoryAgents() {
   // Prune selections that aren't in the current member set
   for (const uid of [...dirSelectedUsers]) if (!union.has(uid)) dirSelectedUsers.delete(uid);
 
-  const presenceRank = { available: 0, onqueue: 1, busy: 2, away: 3, offline: 4 };
-  const routingRank  = { idle: 0, interacting: 1, communicating: 2, not_responding: 3, off_queue: 4, "": 5 };
+  // Presence sort order: On Queue first (ready to take calls), then
+  // Available, then working-but-not-on-queue states, Offline last.
+  const presenceRank = { onqueue: 0, available: 1, busy: 2, away: 3, offline: 4 };
   const nameOf = m => (m.name || m.id || "").toLowerCase();
   const filter = dirAgentsFilter.trim().toLowerCase();
   let members = [...union].map(id => usersById.get(id) || { id, name: id });
@@ -2118,12 +2118,6 @@ function renderDirectoryAgents() {
     if (dirSortMode === "presence") {
       const ra = presenceRank[a.presence || "offline"] ?? 99;
       const rb = presenceRank[b.presence || "offline"] ?? 99;
-      if (ra !== rb) return ra - rb;
-      return nameOf(a).localeCompare(nameOf(b));
-    }
-    if (dirSortMode === "routing") {
-      const ra = routingRank[(a.routingStatus || "").toLowerCase()] ?? 99;
-      const rb = routingRank[(b.routingStatus || "").toLowerCase()] ?? 99;
       if (ra !== rb) return ra - rb;
       return nameOf(a).localeCompare(nameOf(b));
     }
