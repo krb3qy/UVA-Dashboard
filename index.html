@@ -2456,7 +2456,12 @@ async function doAction(act, row) {
   try {
     if (act === "makeCall") { openOutboundModal(); return; }
     if (act === "settings") { openSettings(); return; }
-    if (act === "popout") { triggerPopout(); return; }
+    if (act === "popout") {
+      // In the popout window, the same button pops back in.
+      if (isPopoutMode()) window.close();
+      else triggerPopout();
+      return;
+    }
     if (act === "wrapup") { openWrapupModal(row); return; }
     if (act === "transfer") { openTransferModal(row); return; }
     if (act === "consult") { openConsultModal(row); return; }
@@ -3683,6 +3688,16 @@ function setupPopoutMode() {
     if (popExp) safeSet(STORAGE.tokenExpiresAt, popExp);
   }
   if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
+  // In the popout window, flip the Pop Out button to "Pop In" + arrow-in icon.
+  const btn = document.getElementById("popoutBtn");
+  if (btn) {
+    btn.title = "Pop back into the main window";
+    const lbl = btn.querySelector(".lbl");
+    if (lbl) lbl.textContent = "Pop In";
+    const svg = btn.querySelector("svg");
+    // Arrow-into-box icon — mirror of the pop-out icon.
+    if (svg) svg.innerHTML = '<path fill="none" stroke="#000" d="M14 2H7v2M7 2v5h7V2zM2 7V2h5l-2 2 4 4-1 1-4-4-2 2z"/>';
+  }
 }
 
 // ================================================================
