@@ -1719,12 +1719,18 @@ async function fetchQueueMembers(queueId) {
       total = r.total || 0;
       for (const m of entities) {
         ids.add(m.id);
-        const rawP = m.presence?.presenceDefinition?.systemPresence || "";
+        // Verified against the live API response: presence is nested
+        // under m.user, NOT at the top level. I was reading m.presence
+        // for weeks — always undefined — so every member rendered as
+        // Offline regardless of actual status. m.id === m.user.id so
+        // the userId is safe to take from either.
+        const rawP = m.user?.presence?.presenceDefinition?.systemPresence || "";
         usersById.set(m.id, {
-          id: m.id, name: m.name,
+          id: m.id,
+          name: m.user?.name || m.name,
           presence: mapPresence(rawP),
           presenceRaw: rawP,
-          routingStatus: m.routingStatus?.status || ""
+          routingStatus: m.routingStatus?.status || m.user?.routingStatus?.status || ""
         });
       }
       // Triple-redundant stop conditions because GC's entity-listing
