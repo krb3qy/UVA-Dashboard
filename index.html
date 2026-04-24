@@ -213,6 +213,13 @@
     .stats-row .value { font-weight: 600; color: #000; min-width: 32px; text-align: right;
       font-variant-numeric: tabular-nums; }
 
+    /* Directory tab bar (Agents / Dialer Groups) */
+    .dir-tab { padding: 1px 8px; font-size: 11px; cursor: pointer;
+      border: 1px solid transparent; border-radius: 3px 3px 0 0; color: #1e3a5f; }
+    .dir-tab:hover { background: var(--win-menu-hover); }
+    .dir-tab.active { background: #fff; border-color: var(--win-border-soft);
+      border-bottom-color: #fff; font-weight: 600; }
+
     /* Directory rows */
     .dir-row { display: flex; align-items: center; padding: 2px 8px; gap: 6px;
       font-size: 11px; border-bottom: 1px dotted #eee; cursor: default; }
@@ -473,15 +480,17 @@
         </div>
       </div>
       <div class="side-panel dir-panel" id="dirPanel">
-        <div class="side-head">
-          <span>Directory</span>
-          <span class="sp"></span>
+        <div class="side-head" style="gap:4px;flex-wrap:wrap">
+          <span class="dir-tab active" data-dir-tab="agents">Agents</span>
+          <span class="dir-tab" data-dir-tab="dialer">Dialer Groups</span>
+          <span class="sp" style="flex:1"></span>
           <select id="dirSort" title="Sort agents" style="font-size:10px;padding:0 2px;height:16px;border:1px solid var(--win-border-soft);background:#fff">
             <option value="name-asc">Name A→Z</option>
             <option value="name-desc">Name Z→A</option>
             <option value="presence">Presence</option>
             <option value="routing">Routing Status</option>
           </select>
+          <button class="btn btn-sm" id="dirConfBtn" style="display:none;padding:0 6px;font-size:11px;height:18px">Conference 0</button>
           <span class="count" id="dirCount">0</span>
         </div>
         <div class="side-body" id="dirBody">
@@ -1942,22 +1951,40 @@ function renderStats() {
 }
 
 // ================================================================
-//  Directory panel
+//  Directory panel — tabs: Agents / Dialer Groups
 // ================================================================
+let dirActiveTab = "agents";            // agents | dialer
+const dirSelectedUsers = new Set();     // userIds checked in Agents tab
+
 function renderDirectory() {
+  // Tab highlight
+  document.querySelectorAll(".dir-tab[data-dir-tab]").forEach(t => {
+    t.classList.toggle("active", t.dataset.dirTab === dirActiveTab);
+  });
+  // Sort dropdown is only meaningful on Agents tab
+  const sortSel = el("dirSort");
+  if (sortSel) sortSel.style.display = dirActiveTab === "agents" ? "" : "none";
+
+  if (dirActiveTab === "dialer") { renderDirectoryDialerGroups(); return; }
+  renderDirectoryAgents();
+}
+
+function renderDirectoryAgents() {
   const body = el("dirBody");
   const qids = activeTabQueueIds();
-  if (qids.length === 0) { body.innerHTML = '<div class="empty-msg">Select a queue to load members</div>'; el("dirCount").textContent = "0"; return; }
+  if (qids.length === 0) { body.innerHTML = '<div class="empty-msg">Select a queue to load members</div>'; el("dirCount").textContent = "0"; updateDirConfBtn(); return; }
 
-  // Union of members across every queue in the active tab. A user who
-  // belongs to multiple queues in the tab only appears once.
+  // Union of members across every queue in the active tab.
   const union = new Set();
   let anyLoaded = false;
   for (const q of qids) {
     const set = queueMembers.get(q);
     if (set) { anyLoaded = true; for (const id of set) union.add(id); }
   }
-  if (!anyLoaded) { body.innerHTML = '<div class="empty-msg">Loading members…</div>'; el("dirCount").textContent = "0"; return; }
+  if (!anyLoaded) { body.innerHTML = '<div class="empty-msg">Loading members…</div>'; el("dirCount").textContent = "0"; updateDirConfBtn(); return; }
+
+  // Prune selections that aren't in the current member set
+  for (const uid of [...dirSelectedUsers]) if (!union.has(uid)) dirSelectedUsers.delete(uid);
 
   const presenceRank = { available: 0, busy: 1, meeting: 2, away: 3, offline: 4 };
   const routingRank  = { idle: 0, interacting: 1, communicating: 2, not_responding: 3, off_queue: 4, "": 5 };
@@ -1977,26 +2004,81 @@ function renderDirectory() {
       if (ra !== rb) return ra - rb;
       return nameOf(a).localeCompare(nameOf(b));
     }
-    return nameOf(a).localeCompare(nameOf(b));    // name-asc (default)
+    return nameOf(a).localeCompare(nameOf(b));
   });
   el("dirCount").textContent = members.length;
-  const sortSel = el("dirSort"); if (sortSel) sortSel.value = dirSortMode;
+  if (sortSel) sortSel.value = dirSortMode;
 
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
     const r = m.routingStatus ? ` · ${m.routingStatus}` : "";
     const sel = selectedDirUserId === m.id ? " selected" : "";
+    const checked = dirSelectedUsers.has(m.id) ? "checked" : "";
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}">
+      <input type="checkbox" class="dir-check" data-uid-cb="${escape(m.id)}" ${checked} style="margin-right:4px" />
       <span class="p-dot ${p}" title="${escape(p)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
       <span class="rstatus">${escape(r)}</span>
     </div>`;
   }).join("");
 
-  body.querySelectorAll(".dir-row").forEach(r => r.addEventListener("click", () => {
+  body.querySelectorAll(".dir-row").forEach(r => r.addEventListener("click", (e) => {
+    // Checkbox clicks shouldn't select the row — they toggle membership
+    if (e.target.matches(".dir-check")) return;
     selectedDirUserId = r.dataset.uid;
     renderDirectory();
   }));
+  body.querySelectorAll(".dir-check").forEach(cb => cb.addEventListener("change", (e) => {
+    e.stopPropagation();
+    const uid = cb.dataset.uidCb;
+    if (cb.checked) dirSelectedUsers.add(uid); else dirSelectedUsers.delete(uid);
+    updateDirConfBtn();
+  }));
+  updateDirConfBtn();
+}
+
+function renderDirectoryDialerGroups() {
+  const body = el("dirBody");
+  const groups = loadConfGroups();
+  el("dirCount").textContent = groups.length;
+  if (groups.length === 0) {
+    body.innerHTML = '<div class="empty-msg">No saved speed-dial groups yet. Use the Conference button in the toolbar to create one.</div>';
+    updateDirConfBtn();
+    return;
+  }
+  body.innerHTML = groups.map((g, i) => {
+    const preview = g.numbers.slice(0, 2).map(formatPhone).join(", ") + (g.numbers.length > 2 ? ` +${g.numbers.length - 2}` : "");
+    return `<div class="dir-row" style="display:flex;align-items:center;gap:6px" data-g-idx="${i}">
+      <span style="flex:0 0 auto;background:#d4e0f5;border:1px solid #8aa8d8;padding:0 5px;border-radius:2px;font-size:10px">${g.numbers.length}</span>
+      <span class="name" style="flex:1;min-width:0"><strong>${escape(g.name)}</strong><br><span style="color:var(--win-muted);font-size:10px">${escape(preview)}</span></span>
+      <button class="btn btn-sm" data-g-bridge="${i}" style="padding:0 6px;font-size:10px;height:18px">Bridge</button>
+    </div>`;
+  }).join("");
+  body.querySelectorAll("[data-g-bridge]").forEach(b => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const g = loadConfGroups()[Number(b.dataset.gBridge)];
+    if (!g) return;
+    runConference(g.numbers, localStorage.getItem(STORAGE.confLastFromQueue) || "");
+    showBanner({ type: "info", title: "Bridging group", message: `${g.name} — ${g.numbers.length} number(s)`, autoHideMs: 2500 });
+  }));
+  updateDirConfBtn();
+}
+
+function updateDirConfBtn() {
+  const btn = el("dirConfBtn");
+  if (!btn) return;
+  const n = (dirActiveTab === "agents") ? dirSelectedUsers.size : 0;
+  btn.style.display = n >= 2 ? "" : "none";
+  btn.textContent = `Conference ${n}`;
+}
+
+// One-shot create an ad-hoc conference by userId. Destination model
+// supports userId per the SDK, so POST /conversations/calls with
+// participants: [{userId}, …] rings all of them into one conversation.
+async function createUserConference(userIds) {
+  if (!userIds || userIds.length < 2) throw new Error("Need at least 2 users");
+  const participants = userIds.map(u => ({ userId: u }));
+  return apiFetch("/api/v2/conversations/calls", { method: "POST", body: { participants } });
 }
 
 // ================================================================
@@ -2921,13 +3003,35 @@ function wireStatusBar() {
 
 function wireDirectory() {
   const sel = el("dirSort");
-  if (!sel) return;
-  sel.value = dirSortMode;
-  sel.addEventListener("change", () => {
-    dirSortMode = sel.value;
-    try { localStorage.setItem(STORAGE.dirSort, dirSortMode); } catch {}
-    renderDirectory();
+  if (sel) {
+    sel.value = dirSortMode;
+    sel.addEventListener("change", () => {
+      dirSortMode = sel.value;
+      try { localStorage.setItem(STORAGE.dirSort, dirSortMode); } catch {}
+      renderDirectory();
+    });
+  }
+  // Tab clicks (Agents / Dialer Groups)
+  document.querySelectorAll(".dir-tab[data-dir-tab]").forEach(t => {
+    t.addEventListener("click", () => { dirActiveTab = t.dataset.dirTab; renderDirectory(); });
   });
+  // Conference N button — rings every selected user into one ad-hoc conference
+  const btn = el("dirConfBtn");
+  if (btn) {
+    btn.addEventListener("click", async () => {
+      const ids = [...dirSelectedUsers];
+      if (ids.length < 2) return;
+      try {
+        await createUserConference(ids);
+        dirSelectedUsers.clear();
+        updateDirConfBtn();
+        renderDirectory();
+        showBanner({ type: "info", title: "Conference ringing", message: `${ids.length} user(s)`, autoHideMs: 3000 });
+      } catch (e) {
+        showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 5000 });
+      }
+    });
+  }
 }
 
 function toggleRightCol() {
