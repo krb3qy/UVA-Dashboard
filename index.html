@@ -1336,12 +1336,20 @@ function computeTopics() {
     topics.push(`v2.routing.queues.${qid}.conversations.calls`);
     topics.push(`v2.analytics.queues.${qid}.observations`);
   }
-  if (activeTabQueueId && queueMembers.has(activeTabQueueId)) {
-    for (const uid of queueMembers.get(activeTabQueueId)) {
-      if (uid === currentUser?.id) continue;
-      topics.push(`v2.users.${uid}.presence`);
-      topics.push(`v2.users.${uid}.routingStatus`);
-    }
+  // Presence + routingStatus subscriptions for every member across
+  // every queue in the active tab. Previously only the primary queue's
+  // members got subscribed, so on a group tab agents from the 2nd+
+  // queues never got live presence updates and their status dots stayed
+  // stuck on their initial fetched value.
+  const memberIds = new Set();
+  for (const qid of activeTabQueueIds()) {
+    const set = queueMembers.get(qid);
+    if (set) for (const uid of set) memberIds.add(uid);
+  }
+  for (const uid of memberIds) {
+    if (uid === currentUser?.id) continue;
+    topics.push(`v2.users.${uid}.presence`);
+    topics.push(`v2.users.${uid}.routingStatus`);
   }
   return [...new Set(topics)];
 }
@@ -2087,16 +2095,23 @@ function renderDirectoryAgents() {
   const sortSel = el("dirSort");
   if (sortSel) sortSel.value = dirSortMode;
 
+  // Fallback label table so the status text always renders, even when
+  // presenceRaw hasn't come in yet (initial fetch, new WS subscription,
+  // etc). Keys match mapPresence() output buckets.
+  const bucketLabel = { available: "Available", busy: "Busy", away: "Away",
+    onqueue: "On Queue", offline: "Offline" };
+
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
-    const presenceLabel = formatPresenceName(m.presenceRaw);
+    const raw = formatPresenceName(m.presenceRaw);
+    const label = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
     const sel = selectedDirUserId === m.id ? " selected" : "";
     const checked = dirSelectedUsers.has(m.id) ? "checked" : "";
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}">
       <input type="checkbox" class="dir-check" data-uid-cb="${escape(m.id)}" ${checked} style="margin-right:4px" />
-      <span class="p-dot ${p}" title="${escape(presenceLabel)}"></span>
+      <span class="p-dot ${p}" title="${escape(label)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
-      <span class="rstatus">${presenceLabel !== "—" ? "· " + escape(presenceLabel) : ""}</span>
+      <span class="rstatus">· ${escape(label)}</span>
     </div>`;
   }).join("");
 
