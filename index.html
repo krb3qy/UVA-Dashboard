@@ -1672,13 +1672,22 @@ async function pollQueue(queueId) {
       }
     }
 
-    // 4. Upgrade placeholders with full participant data (for actions).
-    // Pass the queueId as a hint — the full conversation may have lost
-    // queueId from its participants once it moved past ACD.
+    // 4. Upgrade placeholders with full participant data (for actions
+    // + agent name in the User column). Pass the queueId hint — the
+    // full conversation may have lost queueId from its participants
+    // once it moved past ACD. If an agent's name comes back on the
+    // conversation but the user isn't in usersById yet, kick off a
+    // resolveUser so future renders pick up the real name.
     for (const id of convIds) {
       apiFetch(`/api/v2/conversations/calls/${id}`)
-        .then(full => { ingestConversation(full, queueId); renderAll(); })
-        .catch(() => {});
+        .then(full => {
+          ingestConversation(full, queueId);
+          const agentUid = (full.participants || []).slice().reverse()
+            .find(p => p.purpose === "agent" && p.userId)?.userId;
+          if (agentUid && !usersById.get(agentUid)?.name) resolveUser(agentUid).then(renderAll).catch(() => {});
+          renderAll();
+        })
+        .catch(e => console.warn("upgrade failed for", id, e?.message || e));
     }
     renderAll();
   } catch (e) {
@@ -1698,20 +1707,32 @@ async function pollQueue(queueId) {
 const seedQueueCalls = pollQueue;
 async function fetchQueueMembers(queueId) {
   try {
-    const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&expand=presence,routingStatus`);
     const ids = new Set();
-    for (const m of r.entities || []) {
-      ids.add(m.id);
-      const rawP = m.presence?.presenceDefinition?.systemPresence || "";
-      usersById.set(m.id, {
-        id: m.id, name: m.name,
-        presence: mapPresence(rawP),
-        presenceRaw: rawP,
-        routingStatus: m.routingStatus?.status || ""
-      });
+    let page = 1;
+    while (true) {
+      const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&pageNumber=${page}&expand=presence,routingStatus`);
+      const entities = r.entities || [];
+      for (const m of entities) {
+        ids.add(m.id);
+        const rawP = m.presence?.presenceDefinition?.systemPresence || "";
+        usersById.set(m.id, {
+          id: m.id, name: m.name,
+          presence: mapPresence(rawP),
+          presenceRaw: rawP,
+          routingStatus: m.routingStatus?.status || ""
+        });
+      }
+      // Stop when we've pulled every page the API says exists. Fall back to
+      // a short-read check (entities < pageSize) for servers that don't
+      // return pageCount. Safety cap at 50 pages = 5000 members.
+      const pageCount = r.pageCount;
+      if (pageCount && page >= pageCount) break;
+      if (entities.length < 100) break;
+      page++;
+      if (page > 50) { console.warn("queue members: capped at 50 pages", queueId); break; }
     }
     queueMembers.set(queueId, ids);
-  } catch (e) { console.warn("queue members", e); }
+  } catch (e) { console.warn("queue members", queueId, e); }
 }
 
 // Fetch members for every queue in the active tab in parallel.
