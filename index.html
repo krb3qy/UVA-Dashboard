@@ -1856,7 +1856,7 @@ function renderTabs() {
     </div>`;
   }).join("");
   bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn" title="Add or manage queue tabs">+ Queue</button>`;
-  el("addTabBtn").addEventListener("click", openSettings);
+  el("addTabBtn").addEventListener("click", () => openCreateGroupModal());
 }
 
 function renderToolbar() {
