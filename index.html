@@ -1109,7 +1109,12 @@ const COLUMNS = {
   number:        { label: "Number", width: "140px", render: r => escape(r.number) },
   duration:      { label: "Duration", width: "80px", render: r => humanDuration(Date.now() - r.startTimeMs) },
   queue:         { label: "Queue", width: "140px", render: r => escape(r.queueName) },
-  assigned:      { label: "User", width: "140px", render: r => escape(r.assignedUserName) },
+  assigned:      { label: "User", width: "140px", render: r => {
+    // Live cache lookup so a renderAll triggered by resolveUser picks up the
+    // name even if the row was last written when the cache was still empty.
+    const cached = r.assignedUserId ? usersById.get(r.assignedUserId)?.name : "";
+    return escape(cached || r.assignedUserName || "");
+  } },
   station:       { label: "Station", width: "100px", render: r => escape(r.station) },
   line:          { label: "Line", width: "90px", render: r => escape(r.line) },
   interactionId: { label: "Interaction Id", width: "240px", render: r => escape(r.id) },
@@ -1481,6 +1486,14 @@ function ingestConversation(c, hintQueueId) {
   const queueEnterMs = acd?.startTime ? new Date(acd.startTime).getTime() : startTimeMs;
   const stateChangeMs = startTimeMs;
 
+  // Preserve the agent assignment we already had if this upgrade payload
+  // doesn't have a better one — the observation poll's obs.userId is
+  // authoritative and shouldn't get nulled out by a partial upgrade response.
+  const prior = conversations.get(c.id);
+  const resolvedUserId = agent?.userId || prior?.assignedUserId || null;
+  const resolvedUserName = resolvedUserId
+    ? (usersById.get(resolvedUserId)?.name || agent?.name || prior?.assignedUserName || "")
+    : "";
   const row = {
     id: c.id,
     name: customer.name || agent?.name || "",
@@ -1489,8 +1502,8 @@ function ingestConversation(c, hintQueueId) {
     queueName: queueId ? (queuesById.get(queueId)?.name || queueId) : "",
     stateKey, stateDisplay,
     held,
-    assignedUserId: agent?.userId || null,
-    assignedUserName: agent ? (usersById.get(agent.userId)?.name || agent.name || "") : "",
+    assignedUserId: resolvedUserId,
+    assignedUserName: resolvedUserName,
     startTimeMs, queueEnterMs, stateChangeMs,
     hasMe: parts.some(p => p.userId === currentUser?.id && !p.endTime),
     disconnected: parts.every(p => p.state === "disconnected" || p.endTime),
