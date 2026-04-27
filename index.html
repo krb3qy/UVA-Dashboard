@@ -1119,6 +1119,7 @@ const COLUMNS = {
   line:          { label: "Line", width: "90px", render: r => escape(r.line) },
   interactionId: { label: "Interaction Id", width: "240px", render: r => escape(r.id) },
   interactionType:{label: "Type", width: "70px", render: r => escape(r.type) },
+  direction:     { label: "Direction", width: "90px", render: r => escape(r.direction || "") },
   details:       { label: "Details", width: "180px", render: r => escape(r.details) },
   accountCode:   { label: "Account", width: "100px", render: r => escape(r.accountCode) },
   wrapup:        { label: "Wrapup", width: "120px", render: r => escape(r.wrapupCode) },
@@ -1513,6 +1514,7 @@ function ingestConversation(c, hintQueueId) {
     line: primaryCall.edgeGroupId || "",
     type: primaryCall.provider || "voice",
     details: [customer.name, customer.address].filter(Boolean).join(" · "),
+    direction: primaryCall.direction || customer.direction || prior?.direction || "",
     waitReason: acd?.flaggedReason || primaryCall.flaggedReason || "",
     accountCode: c.externalTag || agent?.attributes?.accountCode || "",
     wrapupCode: agent?.wrapup?.code || "",
@@ -1676,6 +1678,7 @@ async function pollQueue(queueId) {
               existing.assignedUserId = obsUserId;
               existing.assignedUserName = obsUserName || existing.assignedUserName || "";
             }
+            if (obs.direction) existing.direction = obs.direction;
             continue;
           }
           const stateDisplay = k === "connected" ? "ACD – Assigned"
@@ -1698,6 +1701,7 @@ async function pollQueue(queueId) {
             recording: false, monitored: false,
             station: "", line: "", type: "voice",
             details: [obs.participantName, obs.ani].filter(Boolean).join(" · "),
+            direction: obs.direction || "",
             waitReason: "", accountCode: "", wrapupCode: "", subject: "",
             raw: { id: obs.conversationId, participants: [] }
           });
