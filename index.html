@@ -2261,9 +2261,29 @@ function renderDirectoryAgents() {
   const filter = dirAgentsFilter.trim().toLowerCase();
   let members = [...union].map(id => usersById.get(id) || { id, name: id });
   if (filter) members = members.filter(m => nameOf(m).includes(filter));
+
+  // "On Call" detection — two signals (verified against GC routing-status
+  // glossary, see reference_gc_observations_query memory + Genesys docs):
+  // 1) Tab-scoped: any cached conversation where state=connected and
+  //    assignedUserId matches the member, in one of this tab's queues.
+  //    Matches the stats panel's "On a Call" counter exactly.
+  // 2) Fallback: routingStatus === "INTERACTING" — agent is handling an
+  //    ACD interaction (live or ACW), even in a queue we're not watching.
+  const qidSet = new Set(qids);
+  const onCallByConv = new Set();
+  for (const r of conversations.values()) {
+    if (r.stateKey === "connected" && r.assignedUserId && r.queueId && qidSet.has(r.queueId)) {
+      onCallByConv.add(r.assignedUserId);
+    }
+  }
+  const isOnCall = (m) => onCallByConv.has(m.id) || m.routingStatus === "INTERACTING";
+
   members.sort((a, b) => {
     if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
     if (dirSortMode === "presence") {
+      // On Call bubbles to the top of presence sort.
+      const aOn = isOnCall(a), bOn = isOnCall(b);
+      if (aOn !== bOn) return aOn ? -1 : 1;
       const ra = presenceRank[a.presence || "offline"] ?? 99;
       const rb = presenceRank[b.presence || "offline"] ?? 99;
       if (ra !== rb) return ra - rb;
@@ -2297,12 +2317,15 @@ function renderDirectoryAgents() {
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
     const raw = formatPresenceName(m.presenceRaw);
-    const label = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
+    const baseLabel = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
+    const onCall = isOnCall(m);
+    const dotClass = onCall ? "busy" : p;
+    const label = onCall ? "On Call" : baseLabel;
     const sel = dirSelectedUsers.has(m.id) ? " selected" : "";
     const qlist = (userQueues.get(m.id) || []).join(", ");
-    const tip = `${m.name || m.id}\n${label}${qlist ? `\nMember of: ${qlist}` : ""}`;
+    const tip = `${m.name || m.id}\n${onCall ? `On Call (${baseLabel})` : baseLabel}${qlist ? `\nMember of: ${qlist}` : ""}`;
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}" title="${escape(tip)}">
-      <span class="p-dot ${p}" title="${escape(label)}"></span>
+      <span class="p-dot ${dotClass}" title="${escape(label)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
       <span class="rstatus">· ${escape(label)}</span>
     </div>`;
