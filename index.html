@@ -1104,7 +1104,20 @@ const COLUMNS = {
   stateIcon:     { label: "", width: "24px", icon: true, render: r => rowStateIcon(r) },
   recIcon:       { label: "Rec", width: "32px", icon: true, render: r => r.recording ? '<span title="Recording" class="ico-color" style="color:#c00">●</span>' : '' },
   listenIcon:    { label: "Lstn", width: "32px", icon: true, render: r => r.monitored ? '<span title="Monitored" class="ico-color" style="color:#036">◉</span>' : '' },
-  state:         { label: "State", width: "140px", render: r => `<span class="state-text ${escape(r.stateKey)}">${escape(r.stateDisplay)}</span>` },
+  state:         { label: "State", width: "140px", render: r => {
+    // Compute display at render time so resolveUser landing AFTER ingest
+    // still updates the column (same pattern as the User column live lookup).
+    const sk = r.stateKey || "";
+    const liveName = r.assignedUserId ? (usersById.get(r.assignedUserId)?.name || r.assignedUserName || "") : "";
+    const acd = r.isAcd !== false; // default true for queue-view rows
+    let txt;
+    if (sk === "alerting" && liveName) txt = `${acd ? "ACD – " : ""}Alerting: ${liveName}`;
+    else if (sk === "connected" && liveName) txt = `${acd ? "ACD – " : ""}Assigned: ${liveName}`;
+    else if (sk === "offering") txt = "ACD – Wait Agent";
+    else if (sk) txt = sk.charAt(0).toUpperCase() + sk.slice(1);
+    else txt = "";
+    return `<span class="state-text ${escape(sk)}">${escape(txt)}</span>`;
+  } },
   name:          { label: "Name", width: "160px", render: r => escape(r.name) },
   number:        { label: "Number", width: "140px", render: r => escape(r.number) },
   duration:      { label: "Duration", width: "80px", render: r => humanDuration(Date.now() - r.startTimeMs) },
@@ -1520,6 +1533,9 @@ function ingestConversation(c, hintQueueId) {
     queueId,
     queueName: queueId ? (queuesById.get(queueId)?.name || queueId) : "",
     stateKey, stateDisplay,
+    // Sticky: if the upgrade payload has no purpose=agent leg but we already
+    // knew this was ACD (came in via queue observation), keep it ACD.
+    isAcd: isAcd || existing?.isAcd || false,
     held,
     assignedUserId: resolvedUserId,
     assignedUserName: resolvedUserName,
@@ -1718,6 +1734,9 @@ async function pollQueue(queueId) {
             queueName: queuesById.get(queueId)?.name || queueId,
             stateKey: k,
             stateDisplay,
+            // Anything coming through the queue observation poll is by
+            // definition ACD-routed — that's how it ended up in the queue.
+            isAcd: true,
             held: k === "held",
             assignedUserId: obsUserId,
             assignedUserName: obsUserName,
