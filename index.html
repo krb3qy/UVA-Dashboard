@@ -1459,7 +1459,14 @@ function formatPresenceName(raw) {
 function ingestConversation(c, hintQueueId) {
   const parts = c.participants || [];
   const customer = parts.find(p => p.purpose === "customer" || p.purpose === "external") || {};
-  const agent = [...parts].reverse().find(p => p.purpose === "agent") || null;
+  // Prefer purpose=agent for ACD-routed calls. Fall back to a user-purpose
+  // leg with a userId for direct-routed / transferred / non-ACD calls so
+  // the State column doesn't degrade to bare "Connected" when the agent
+  // leg is tagged differently.
+  const agent = [...parts].reverse().find(p => p.purpose === "agent")
+             || [...parts].reverse().find(p => p.purpose === "user" && p.userId)
+             || null;
+  const isAcd = !!parts.find(p => p.purpose === "agent");
   const acd = parts.find(p => p.purpose === "acd") || null;
   const monitor = parts.find(p => p.purpose === "monitor");
   const calls = (agent?.calls || customer?.calls || parts.flatMap(p => p.calls || []));
@@ -1477,8 +1484,9 @@ function ingestConversation(c, hintQueueId) {
   let stateKey = (primaryCall.state || agent?.state || "connected").toLowerCase();
   if (held) stateKey = "held";
   let stateDisplay = stateKey.charAt(0).toUpperCase() + stateKey.slice(1);
-  if (stateKey === "alerting" && agent) stateDisplay = `ACD – Alerting: ${agent.name || (usersById.get(agent.userId)?.name || "")}`;
-  else if (stateKey === "connected" && agent) stateDisplay = `ACD – Assigned: ${agent.name || (usersById.get(agent.userId)?.name || "")}`;
+  const handlerName = agent ? (agent.name || usersById.get(agent.userId)?.name || "") : "";
+  if (stateKey === "alerting" && agent) stateDisplay = `${isAcd ? "ACD – " : ""}Alerting: ${handlerName}`;
+  else if (stateKey === "connected" && agent) stateDisplay = `${isAcd ? "ACD – " : ""}Assigned: ${handlerName}`;
   else if (stateKey === "offering") stateDisplay = `ACD – Wait Agent`;
 
   const startTime = primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime ||
@@ -1507,7 +1515,10 @@ function ingestConversation(c, hintQueueId) {
     assignedUserName: resolvedUserName,
     startTimeMs, queueEnterMs, stateChangeMs,
     hasMe: parts.some(p => p.userId === currentUser?.id && !p.endTime),
-    disconnected: parts.every(p => p.state === "disconnected" || p.endTime),
+    // GC distinguishes clean "disconnected" from error-paths like "terminated";
+    // both mean the leg is over. Pruning only on "disconnected" let terminated
+    // rows linger in the cache.
+    disconnected: parts.every(p => p.state === "disconnected" || p.state === "terminated" || p.endTime),
     recording: c.recordingState && c.recordingState !== "none",
     monitored: !!monitor || !!customer.monitoredParticipantId,
     station: agent?.attributes?.stationId || "",
