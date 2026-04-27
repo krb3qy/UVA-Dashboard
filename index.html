@@ -1642,12 +1642,27 @@ async function pollQueue(queueId) {
           // existing upgraded record every poll cycle wipes the resolved agent
           // name and re-blanks the User column until the async upgrade fetch
           // settles (and persistently if that fetch fails).
+          // The observation already carries the agent's userId for oInteracting
+          // and oAlerting (verified against SDK Observationvalue model).
+          // Resolve the name from the cache; kick off resolveUser if missing.
+          const obsUserId = obs.userId || null;
+          const obsUserName = obsUserId ? (usersById.get(obsUserId)?.name || "") : "";
+          if (obsUserId && !usersById.has(obsUserId)) {
+            resolveUser(obsUserId).then(renderAll).catch(() => {});
+          }
           const existing = conversations.get(obs.conversationId);
           if (existing) {
             // Refresh state-y fields only; keep participant resolution intact.
             existing.stateKey = k;
             existing.queueId = queueId;
             existing.queueName = queuesById.get(queueId)?.name || existing.queueName || queueId;
+            // Always refresh the agent assignment from the observation — it's
+            // authoritative for who the call is currently with, even if the
+            // /conversations/calls/{id} upgrade hasn't landed yet.
+            if (obsUserId) {
+              existing.assignedUserId = obsUserId;
+              existing.assignedUserName = obsUserName || existing.assignedUserName || "";
+            }
             continue;
           }
           const stateDisplay = k === "connected" ? "ACD – Assigned"
@@ -1663,8 +1678,8 @@ async function pollQueue(queueId) {
             stateKey: k,
             stateDisplay,
             held: k === "held",
-            assignedUserId: null,
-            assignedUserName: "",
+            assignedUserId: obsUserId,
+            assignedUserName: obsUserName,
             startTimeMs: startMs, queueEnterMs: startMs, stateChangeMs: startMs,
             hasMe: false, disconnected: false,
             recording: false, monitored: false,
