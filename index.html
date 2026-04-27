@@ -1470,23 +1470,42 @@ function ingestConversation(c, hintQueueId) {
   const acd = parts.find(p => p.purpose === "acd") || null;
   const monitor = parts.find(p => p.purpose === "monitor");
   const calls = (agent?.calls || customer?.calls || parts.flatMap(p => p.calls || []));
-  const primaryCall = calls.find(cc => cc.state && cc.state !== "disconnected") || calls[0] || {};
+  // SDK call-state enum:
+  // alerting, dialing, contacting, offering, connected, disconnected,
+  // terminated, converting, uploading, transmitting, parked, none.
+  // Prefer a connected leg so a terminated agent leg with a still-connected
+  // customer doesn't drag stateKey to "terminated".
+  const primaryCall = calls.find(cc => cc.state === "connected")
+                  || calls.find(cc => cc.state === "alerting")
+                  || calls.find(cc => cc.state && cc.state !== "disconnected" && cc.state !== "terminated")
+                  || calls.find(cc => cc.state && cc.state !== "disconnected")
+                  || calls[0] || {};
   // Try every participant for queueId — when a call moves ACD→agent, the
   // ACD leg can have endTime + queueId dropped, and the agent leg doesn't
   // always carry it either. Hint (from seeder/WS topic) is the last resort
   // so a known-good queueId never gets nulled out.
   const partQueueId = parts.map(p => p.queueId).find(Boolean);
-  // Preserve existing queueId on the conversation if we already knew it.
+  // Preserve existing queueId / assignment on the conversation if we already
+  // knew them — observation poll's obs.userId is authoritative and shouldn't
+  // get nulled out by a partial / RBAC-stripped upgrade response.
   const existing = conversations.get(c.id);
   const queueId = acd?.queueId || agent?.queueId || partQueueId || hintQueueId || existing?.queueId || null;
 
   const held = !!primaryCall.held;
   let stateKey = (primaryCall.state || agent?.state || "connected").toLowerCase();
   if (held) stateKey = "held";
+
+  // Resolve the assignment BEFORE building stateDisplay so the display string
+  // can use the obs.userId-seeded prior name even when the upgrade payload
+  // has no matching participant for us to pull a name from.
+  const resolvedUserId = agent?.userId || existing?.assignedUserId || null;
+  const resolvedUserName = resolvedUserId
+    ? (usersById.get(resolvedUserId)?.name || agent?.name || existing?.assignedUserName || "")
+    : "";
+
   let stateDisplay = stateKey.charAt(0).toUpperCase() + stateKey.slice(1);
-  const handlerName = agent ? (agent.name || usersById.get(agent.userId)?.name || "") : "";
-  if (stateKey === "alerting" && agent) stateDisplay = `${isAcd ? "ACD – " : ""}Alerting: ${handlerName}`;
-  else if (stateKey === "connected" && agent) stateDisplay = `${isAcd ? "ACD – " : ""}Assigned: ${handlerName}`;
+  if (stateKey === "alerting" && resolvedUserName) stateDisplay = `${isAcd ? "ACD – " : ""}Alerting: ${resolvedUserName}`;
+  else if (stateKey === "connected" && resolvedUserName) stateDisplay = `${isAcd ? "ACD – " : ""}Assigned: ${resolvedUserName}`;
   else if (stateKey === "offering") stateDisplay = `ACD – Wait Agent`;
 
   const startTime = primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime ||
@@ -1494,15 +1513,6 @@ function ingestConversation(c, hintQueueId) {
   const startTimeMs = new Date(startTime).getTime();
   const queueEnterMs = acd?.startTime ? new Date(acd.startTime).getTime() : startTimeMs;
   const stateChangeMs = startTimeMs;
-
-  // Preserve the agent assignment we already had if this upgrade payload
-  // doesn't have a better one — the observation poll's obs.userId is
-  // authoritative and shouldn't get nulled out by a partial upgrade response.
-  const prior = conversations.get(c.id);
-  const resolvedUserId = agent?.userId || prior?.assignedUserId || null;
-  const resolvedUserName = resolvedUserId
-    ? (usersById.get(resolvedUserId)?.name || agent?.name || prior?.assignedUserName || "")
-    : "";
   const row = {
     id: c.id,
     name: customer.name || agent?.name || "",
@@ -1525,14 +1535,18 @@ function ingestConversation(c, hintQueueId) {
     line: primaryCall.edgeGroupId || "",
     type: primaryCall.provider || "voice",
     details: [customer.name, customer.address].filter(Boolean).join(" · "),
-    direction: primaryCall.direction || customer.direction || prior?.direction || "",
+    direction: primaryCall.direction || customer.direction || existing?.direction || "",
     waitReason: acd?.flaggedReason || primaryCall.flaggedReason || "",
     accountCode: c.externalTag || agent?.attributes?.accountCode || "",
     wrapupCode: agent?.wrapup?.code || "",
     subject: c.description || "",
     raw: c
   };
-  if (row.disconnected) conversations.delete(row.id);
+  // "terminated" is GC's error-path end state per the call-state enum; the
+  // call is over from the user's perspective regardless of whether other
+  // legs have been marked disconnected/endTime'd yet. Force-delete so the
+  // queue view never displays "Terminated".
+  if (row.disconnected || stateKey === "terminated") conversations.delete(row.id);
   else conversations.set(row.id, row);
   maybeFireEmergencyAlert(row);
   checkEmergencyAlertStillActive();
