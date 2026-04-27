@@ -181,6 +181,8 @@
     table.rows-table tr.selected td { background: var(--win-accent); color: var(--win-accent-text); }
     table.rows-table tr.selected td .state-text,
     table.rows-table tr.selected td .ico-color { color: var(--win-accent-text); fill: currentColor; }
+    table.rows-table tr.multi-selected td { box-shadow: inset 3px 0 0 var(--win-accent, #0078d4); background: rgba(0, 120, 212, 0.08); }
+    table.rows-table tr.multi-selected.selected td { background: var(--win-accent); }
     table.rows-table tr.drop-target td { outline: 2px dashed #316ac5; outline-offset: -2px; }
 
     /* Row state text styling */
@@ -369,10 +371,6 @@
   <div class="menu-bar" id="menuBar">
     <div class="item" data-menu="file">File
       <div class="menu-dropdown">
-        <div class="mi" data-cmd="makeCall">New Call…<span class="shortcut">Ctrl+M</span></div>
-        <div class="sep"></div>
-        <div class="mi" data-cmd="popout">Open In New Window</div>
-        <div class="sep"></div>
         <div class="mi" data-cmd="logout">Log Off</div>
       </div>
     </div>
@@ -395,11 +393,7 @@
       </div>
     </div>
     <div class="item" data-menu="workspaces">Workspaces
-      <div class="menu-dropdown">
-        <div class="mi">Default Workspace</div>
-        <div class="sep"></div>
-        <div class="mi disabled">Manage Workspaces…</div>
-      </div>
+      <div class="menu-dropdown"></div>
     </div>
     <div class="item" data-menu="actions">Actions
       <div class="menu-dropdown">
@@ -418,8 +412,6 @@
     <div class="item" data-menu="help">Help
       <div class="menu-dropdown">
         <div class="mi" data-cmd="userGuide">User Guide</div>
-        <div class="sep"></div>
-        <div class="mi" data-cmd="about">About UVA Dashboard</div>
       </div>
     </div>
     <div class="sp"></div>
@@ -489,6 +481,11 @@
       <div class="panel queue-panel">
         <div class="tab-bar" id="tabBar">
           <button class="add-tab" id="addTabBtn">+ Queue</button>
+        </div>
+        <div class="queue-action-bar" id="queueActionBar" style="display:none;padding:6px 8px;background:var(--win-soft,#f3f3f3);border-bottom:1px solid var(--win-border,#ddd);align-items:center;gap:8px">
+          <span id="queueActionBarLabel" style="flex:1;font-size:12px;color:var(--win-muted)"></span>
+          <button class="btn btn-sm" id="queueActionBarClear">Clear</button>
+          <button class="btn btn-sm btn-primary" id="queueActionBarConference">Conference</button>
         </div>
         <div class="rows-wrap">
           <table class="rows-table" id="queueTable">
@@ -1072,6 +1069,7 @@ function loadQueueTabs() {
 }
 let selectedCallId = null;
 let selectedCallScope = null;      // "my" | "queue"
+const queueViewSelectedIds = new Set();   // queue-view rows multi-selected for conference
 let selectedDirUserId = null;
 let settings = {
   extensionId: "",
@@ -1117,7 +1115,6 @@ const COLUMNS = {
   interactionId: { label: "Interaction Id", width: "240px", render: r => escape(r.id) },
   interactionType:{label: "Type", width: "70px", render: r => escape(r.type) },
   details:       { label: "Details", width: "180px", render: r => escape(r.details) },
-  waitReason:    { label: "Wait Reason", width: "120px", render: r => escape(r.waitReason) },
   accountCode:   { label: "Account", width: "100px", render: r => escape(r.accountCode) },
   wrapup:        { label: "Wrapup", width: "120px", render: r => escape(r.wrapupCode) },
   timeInStatus:  { label: "Time in Status", width: "110px", render: r => humanDuration(Date.now() - r.stateChangeMs) },
@@ -1126,7 +1123,11 @@ const COLUMNS = {
 };
 
 const DEFAULT_MY_COLS = ["stateIcon", "recIcon", "state", "name", "number", "duration", "queue", "wrapup", "accountCode"];
-const DEFAULT_QUEUE_COLS = ["stateIcon", "recIcon", "listenIcon", "state", "name", "number", "duration", "queue", "assigned", "waitReason", "interactionId"];
+const DEFAULT_QUEUE_COLS = ["listenIcon", "state", "name", "number", "duration", "queue", "assigned", "interactionId"];
+// Column keys that used to live in queue-view but are now removed. Filtered
+// out of any persisted cols on load so old localStorage entries get cleaned up.
+const REMOVED_QUEUE_COLS = new Set(["stateIcon", "recIcon", "waitReason"]);
+const stripRemovedQueueCols = (arr) => Array.isArray(arr) ? arr.filter(c => !REMOVED_QUEUE_COLS.has(c)) : arr;
 let myCols = [...DEFAULT_MY_COLS];
 let queueCols = [...DEFAULT_QUEUE_COLS];
 // Per-queue column overrides: queueId → array. Defaults to global queueCols.
@@ -1150,7 +1151,7 @@ function loadPerQueueCols() {
   for (const qid of selectedQueueIds) {
     try {
       const raw = localStorage.getItem(`${STORAGE.colsQueue}:${qid}`);
-      if (raw) queueColsByQueue.set(qid, JSON.parse(raw));
+      if (raw) queueColsByQueue.set(qid, stripRemovedQueueCols(JSON.parse(raw)));
     } catch {}
   }
 }
@@ -1489,7 +1490,7 @@ function ingestConversation(c, hintQueueId) {
     stateKey, stateDisplay,
     held,
     assignedUserId: agent?.userId || null,
-    assignedUserName: agent?.userId ? (usersById.get(agent.userId)?.name || agent.name || "") : "",
+    assignedUserName: agent ? (usersById.get(agent.userId)?.name || agent.name || "") : "",
     startTimeMs, queueEnterMs, stateChangeMs,
     hasMe: parts.some(p => p.userId === currentUser?.id && !p.endTime),
     disconnected: parts.every(p => p.state === "disconnected" || p.endTime),
@@ -1795,18 +1796,78 @@ function renderHeaders() {
   const activeCols = getQueueCols(activeTabQueueId);
   el("queueHead").innerHTML = activeCols.map(k => {
     const c = COLUMNS[k]; if (!c) return "";
-    return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="queue">${escape(c.label)}</th>`;
+    return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="queue" draggable="true">${escape(c.label)}</th>`;
   }).join("");
+  wireQueueHeaderDrag();
+}
+
+let _queueHeaderDragKey = null;
+function wireQueueHeaderDrag() {
+  const head = el("queueHead");
+  if (!head) return;
+  head.querySelectorAll("th[data-scope='queue']").forEach(th => {
+    th.addEventListener("dragstart", (e) => {
+      _queueHeaderDragKey = th.dataset.col;
+      th.style.opacity = "0.4";
+      try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", _queueHeaderDragKey); } catch {}
+    });
+    th.addEventListener("dragend", () => { th.style.opacity = ""; _queueHeaderDragKey = null;
+      head.querySelectorAll("th").forEach(x => { x.style.borderLeft = ""; x.style.borderRight = ""; });
+    });
+    th.addEventListener("dragover", (e) => {
+      if (!_queueHeaderDragKey) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = "move"; } catch {}
+      head.querySelectorAll("th").forEach(x => { x.style.borderLeft = ""; x.style.borderRight = ""; });
+      const rect = th.getBoundingClientRect();
+      const before = (e.clientX - rect.left) < rect.width / 2;
+      th.style[before ? "borderLeft" : "borderRight"] = "2px solid var(--win-accent, #0078d4)";
+    });
+    th.addEventListener("dragleave", () => { th.style.borderLeft = ""; th.style.borderRight = ""; });
+    th.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const fromKey = _queueHeaderDragKey;
+      _queueHeaderDragKey = null;
+      head.querySelectorAll("th").forEach(x => { x.style.borderLeft = ""; x.style.borderRight = ""; x.style.opacity = ""; });
+      if (!fromKey || fromKey === th.dataset.col) return;
+      const rect = th.getBoundingClientRect();
+      const before = (e.clientX - rect.left) < rect.width / 2;
+      // Reorder lives on the GLOBAL queueCols (per user direction), even if a
+      // per-queue override is active for this tab — so the change propagates.
+      const arr = [...queueCols];
+      const fromIdx = arr.indexOf(fromKey);
+      if (fromIdx === -1) return;
+      arr.splice(fromIdx, 1);
+      let toIdx = arr.indexOf(th.dataset.col);
+      if (toIdx === -1) toIdx = arr.length;
+      if (!before) toIdx += 1;
+      arr.splice(toIdx, 0, fromKey);
+      queueCols = arr;
+      // Drop any per-queue override so the new global order is what renders.
+      queueColsByQueue.clear();
+      try {
+        // Wipe persisted per-queue overrides too.
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(`${STORAGE.colsQueue}:`)) localStorage.removeItem(key);
+        }
+      } catch {}
+      saveCols();
+      renderHeaders();
+      renderQueue();
+    });
+  });
 }
 
 function renderRow(r, scope) {
   const cols = scope === "my" ? myCols : getQueueCols(activeTabQueueId);
   const sel = (selectedCallId === r.id && selectedCallScope === scope) ? " selected" : "";
+  const multi = (scope === "queue" && queueViewSelectedIds.has(r.id)) ? " multi-selected" : "";
   const cells = cols.map(k => {
     const c = COLUMNS[k]; if (!c) return "";
     return `<td class="${c.icon ? 'icon-col' : ''}">${c.render(r)}</td>`;
   }).join("");
-  return `<tr class="row${sel}" data-id="${escape(r.id)}" data-scope="${scope}" draggable="true">${cells}</tr>`;
+  return `<tr class="row${sel}${multi}" data-id="${escape(r.id)}" data-scope="${scope}" draggable="true">${cells}</tr>`;
 }
 
 function renderMy() {
@@ -2326,10 +2387,77 @@ function renderAll() {
   renderMy();
   renderQueue();
   renderToolbar();
+  renderQueueActionBar();
   renderStats();
   renderDirectory();
   renderMyPresence();
   renderCallWidgets();
+}
+
+function renderQueueActionBar() {
+  const bar = el("queueActionBar");
+  if (!bar) return;
+  // Drop disconnected/missing ids from the selection so the count stays honest.
+  for (const id of [...queueViewSelectedIds]) {
+    const r = conversations.get(id);
+    if (!r || r.disconnected) queueViewSelectedIds.delete(id);
+  }
+  const n = queueViewSelectedIds.size;
+  if (n < 2) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  el("queueActionBarLabel").textContent = `${n} interactions selected for conference`;
+  el("queueActionBarClear").onclick = () => { queueViewSelectedIds.clear(); renderAll(); };
+  el("queueActionBarConference").onclick = () => conferenceSelectedQueueCalls();
+}
+
+// Pull every selected queue interaction onto the current user, then merge them
+// all into a single conference. Mirrors the "assign + merge" flow in the merge
+// modal (line ~2905), but driven from the queue-view multi-select.
+async function conferenceSelectedQueueCalls() {
+  const ids = [...queueViewSelectedIds];
+  if (ids.length < 2) return;
+  if (!currentUser?.id) {
+    showBanner({ type: "error", title: "Not signed in", message: "Cannot conference without a current user.", autoHideMs: 4000 });
+    return;
+  }
+  const ok = confirm(`Conference ${ids.length} selected interactions?\n\nEach call will be assigned to you, then merged into a single conference.`);
+  if (!ok) return;
+
+  const btn = el("queueActionBarConference");
+  if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
+  try {
+    // Step 1: assign every selected queue call to me (skip ones I'm already on).
+    const toAssign = ids.filter(id => {
+      const r = conversations.get(id);
+      return r && !r.hasMe && !r.disconnected;
+    });
+    for (const id of toAssign) {
+      try { await assignCallToMe(id); }
+      catch (e) {
+        showBanner({ type: "error", title: "Assign failed", message: `${id}: ${e.message}`, autoHideMs: 5000 });
+      }
+    }
+    // Wait for delivery so hasMe flips on the cached conversations.
+    await new Promise(r => setTimeout(r, 2500));
+
+    // Step 2: union of originally-selected ids + any of mine that came online
+    // (assign delivers via WS; the cache may have updated by now).
+    const mine = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
+    const targetSet = new Set([...ids, ...mine]);
+    const finalIds = [...targetSet];
+    if (finalIds.length < 2) {
+      showBanner({ type: "warn", title: "Nothing to merge", message: "No active calls available after assignment.", autoHideMs: 4000 });
+      return;
+    }
+    await mergeMany(finalIds);
+    showBanner({ type: "info", title: "Conference requested", message: `Merging ${finalIds.length} calls.`, autoHideMs: 3000 });
+    queueViewSelectedIds.clear();
+    renderAll();
+  } catch (e) {
+    showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 5000 });
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Conference"; }
+  }
 }
 
 // ================================================================
@@ -2966,7 +3094,7 @@ function renderQueueList(filter) {
         }
         try {
           const raw = localStorage.getItem(`${STORAGE.colsQueue}:${qid}`);
-          if (raw) queueColsByQueue.set(qid, JSON.parse(raw));
+          if (raw) queueColsByQueue.set(qid, stripRemovedQueueCols(JSON.parse(raw)));
         } catch {}
       } else {
         // Remove any single-queue tab whose only queue is this qid.
@@ -3063,14 +3191,12 @@ function openCreateGroupModal(opts = {}) {
   const preselect = new Set(opts.preselectQids || (editing?.queueIds) || []);
   el("cgName").value = editing?.name || opts.defaultName || "";
   el("cgFilter").value = "";
-  el("cgDeleteDupes").checked = !editing;   // only meaningful on create
-  // Hide "delete dupes" checkbox when editing — doesn't apply
+  el("cgDeleteDupes").checked = false;
   const dupesLabel = el("cgDeleteDupes").parentElement;
-  if (dupesLabel) dupesLabel.style.display = editing ? "none" : "";
-  // Retitle the modal + action button based on mode
+  if (dupesLabel) dupesLabel.style.display = "";
   const modal = el("createGroupModal").querySelector(".titlebar span:first-child");
   if (modal) modal.textContent = editing ? "Edit Tab" : "Create Tab Group";
-  el("cgCreate").textContent = editing ? "Save" : "Create tab";
+  el("cgCreate").textContent = "Save";
 
   // Division dropdown
   const divSel = el("cgDivision");
@@ -3237,7 +3363,7 @@ function loadSettings() {
   try { settings = { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE.settings) || "{}") }; } catch { settings = { ...defaults }; }
   loadQueueTabs();
   try { const s = localStorage.getItem(STORAGE.colsMy); if (s) myCols = JSON.parse(s); } catch {}
-  try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = JSON.parse(s); } catch {}
+  try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = stripRemovedQueueCols(JSON.parse(s)); } catch {}
   try { const s = localStorage.getItem(STORAGE.statsGroupState); if (s) statsGroupState = JSON.parse(s); } catch {}
   try { statusNoteText = localStorage.getItem(STORAGE.statusNote) || ""; } catch { statusNoteText = ""; }
   try { dirSortMode = localStorage.getItem(STORAGE.dirSort) || "name-asc"; } catch { dirSortMode = "name-asc"; }
@@ -3389,8 +3515,18 @@ function wireRowSelection() {
     // row click
     const tr = e.target.closest("tr.row");
     if (tr) {
-      selectedCallId = tr.dataset.id;
-      selectedCallScope = tr.dataset.scope;
+      const id = tr.dataset.id;
+      const scope = tr.dataset.scope;
+      const isMulti = (e.ctrlKey || e.metaKey || e.shiftKey) && scope === "queue";
+      if (isMulti) {
+        if (queueViewSelectedIds.has(id)) queueViewSelectedIds.delete(id);
+        else queueViewSelectedIds.add(id);
+      } else {
+        // Plain click clears the multi-select set and falls back to single-select.
+        queueViewSelectedIds.clear();
+        selectedCallId = id;
+        selectedCallScope = scope;
+      }
       renderAll();
     }
     // Queue tab click / close — my-panel tabs use [data-my-tab], so we
@@ -3950,12 +4086,23 @@ function openSmsModal() {
 
 // ================================================================
 //  WORKSPACES — saved layouts
+//  Storage shape: ordered array [{name, data}, ...]
+//  Migrates the old object-keyed format on read.
 // ================================================================
 function loadWorkspaces() {
-  try { return JSON.parse(localStorage.getItem(STORAGE.workspaces) || "{}"); } catch { return {}; }
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(STORAGE.workspaces) || "[]"); } catch { return []; }
+  if (Array.isArray(raw)) return raw.filter(e => e && typeof e.name === "string");
+  if (raw && typeof raw === "object") {
+    return Object.keys(raw).sort().map(name => ({ name, data: raw[name] }));
+  }
+  return [];
 }
-function saveWorkspaces(map) {
-  try { localStorage.setItem(STORAGE.workspaces, JSON.stringify(map)); } catch {}
+function saveWorkspaces(list) {
+  try { localStorage.setItem(STORAGE.workspaces, JSON.stringify(list)); } catch {}
+}
+function findWorkspace(list, name) {
+  return list.find(e => e.name === name) || null;
 }
 function captureCurrentWorkspace() {
   return {
@@ -3995,36 +4142,109 @@ async function applyWorkspace(ws) {
   for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
   fetchActiveTabMembers();
 }
+function saveActiveWorkspaceChanges() {
+  const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
+  if (!active) return false;
+  const list = loadWorkspaces();
+  const entry = findWorkspace(list, active);
+  if (!entry) return false;
+  entry.data = captureCurrentWorkspace();
+  saveWorkspaces(list);
+  showBanner({ type: "info", title: "Workspace saved", message: `Changes saved to "${active}"`, autoHideMs: 2500 });
+  renderWorkspacesMenu();
+  return true;
+}
+
 function openWorkspacesModal() {
   openModal("workspacesModal");
+  let dragFromIdx = null;
   const renderList = () => {
-    const wsMap = loadWorkspaces();
-    const names = Object.keys(wsMap).sort();
+    const list = loadWorkspaces();
     const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
-    el("workspacesList").innerHTML = names.length === 0
+    const activeBtn = active && findWorkspace(list, active)
+      ? `<button class="btn btn-primary btn-sm" id="workspaceSaveActive" style="margin-bottom:8px">Save changes to "${escape(active)}"</button>`
+      : "";
+    const rows = list.length === 0
       ? '<div class="empty-msg" style="padding:8px">No saved workspaces</div>'
-      : names.map(n => `
-        <div class="queue-picker-item" style="cursor:default">
-          <strong style="flex:1">${escape(n)}${n === active ? " (active)" : ""}</strong>
-          <button class="btn btn-sm" data-ws-load="${escape(n)}">Load</button>
-          <button class="btn btn-sm" data-ws-del="${escape(n)}">Delete</button>
+      : list.map((entry, idx) => `
+        <div class="queue-picker-item ws-row" draggable="true" data-ws-idx="${idx}" style="cursor:default;align-items:center;gap:6px">
+          <span class="ws-drag" title="Drag to reorder" style="cursor:grab;user-select:none;color:var(--win-muted);padding:0 4px">⋮⋮</span>
+          <strong style="flex:1">${escape(entry.name)}${entry.name === active ? " (active)" : ""}</strong>
+          <button class="btn btn-sm" data-ws-load="${escape(entry.name)}">Load</button>
+          <button class="btn btn-sm" data-ws-rename="${escape(entry.name)}">Rename</button>
+          <button class="btn btn-sm" data-ws-del="${escape(entry.name)}">Delete</button>
         </div>`).join("");
+    el("workspacesList").innerHTML = activeBtn + rows;
+
+    const saveBtn = el("workspaceSaveActive");
+    if (saveBtn) saveBtn.onclick = () => { saveActiveWorkspaceChanges(); renderList(); };
+
     el("workspacesList").querySelectorAll("[data-ws-load]").forEach(b => b.onclick = async () => {
-      await applyWorkspace(wsMap[b.dataset.wsLoad]);
-      localStorage.setItem(STORAGE.activeWorkspace, b.dataset.wsLoad);
+      const entry = findWorkspace(loadWorkspaces(), b.dataset.wsLoad);
+      if (!entry) return;
+      await applyWorkspace(entry.data);
+      localStorage.setItem(STORAGE.activeWorkspace, entry.name);
+      renderList(); renderWorkspacesMenu();
+    });
+    el("workspacesList").querySelectorAll("[data-ws-rename]").forEach(b => b.onclick = () => {
+      const oldName = b.dataset.wsRename;
+      const newName = (prompt("Rename workspace:", oldName) || "").trim();
+      if (!newName || newName === oldName) return;
+      const cur = loadWorkspaces();
+      if (findWorkspace(cur, newName)) {
+        showBanner({ type: "error", title: "Name in use", message: `"${newName}" already exists`, autoHideMs: 3000 });
+        return;
+      }
+      const entry = findWorkspace(cur, oldName);
+      if (!entry) return;
+      entry.name = newName;
+      saveWorkspaces(cur);
+      const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
+      if (active === oldName) localStorage.setItem(STORAGE.activeWorkspace, newName);
       renderList(); renderWorkspacesMenu();
     });
     el("workspacesList").querySelectorAll("[data-ws-del]").forEach(b => b.onclick = () => {
-      const m = loadWorkspaces(); delete m[b.dataset.wsDel]; saveWorkspaces(m); renderList(); renderWorkspacesMenu();
+      const name = b.dataset.wsDel;
+      const cur = loadWorkspaces().filter(e => e.name !== name);
+      saveWorkspaces(cur);
+      const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
+      if (active === name) localStorage.removeItem(STORAGE.activeWorkspace);
+      renderList(); renderWorkspacesMenu();
+    });
+
+    // Drag-to-reorder
+    el("workspacesList").querySelectorAll(".ws-row").forEach(row => {
+      row.addEventListener("dragstart", (e) => {
+        dragFromIdx = Number(row.dataset.wsIdx);
+        row.style.opacity = "0.4";
+        try { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(dragFromIdx)); } catch {}
+      });
+      row.addEventListener("dragend", () => { row.style.opacity = ""; dragFromIdx = null; });
+      row.addEventListener("dragover", (e) => { e.preventDefault(); try { e.dataTransfer.dropEffect = "move"; } catch {} row.style.borderTop = "2px solid var(--win-accent, #0078d4)"; });
+      row.addEventListener("dragleave", () => { row.style.borderTop = ""; });
+      row.addEventListener("drop", (e) => {
+        e.preventDefault();
+        row.style.borderTop = "";
+        const toIdx = Number(row.dataset.wsIdx);
+        if (dragFromIdx === null || dragFromIdx === toIdx) return;
+        const cur = loadWorkspaces();
+        if (dragFromIdx < 0 || dragFromIdx >= cur.length || toIdx < 0 || toIdx >= cur.length) return;
+        const [moved] = cur.splice(dragFromIdx, 1);
+        cur.splice(toIdx, 0, moved);
+        saveWorkspaces(cur);
+        renderList(); renderWorkspacesMenu();
+      });
     });
   };
   renderList();
   el("workspaceSave").onclick = () => {
     const n = el("workspaceName").value.trim();
     if (!n) return;
-    const m = loadWorkspaces();
-    m[n] = captureCurrentWorkspace();
-    saveWorkspaces(m);
+    const cur = loadWorkspaces();
+    const existing = findWorkspace(cur, n);
+    if (existing) existing.data = captureCurrentWorkspace();
+    else cur.push({ name: n, data: captureCurrentWorkspace() });
+    saveWorkspaces(cur);
     localStorage.setItem(STORAGE.activeWorkspace, n);
     el("workspaceName").value = "";
     renderList(); renderWorkspacesMenu();
@@ -4033,19 +4253,25 @@ function openWorkspacesModal() {
 function renderWorkspacesMenu() {
   const menu = document.querySelector('.menu-bar .item[data-menu="workspaces"] .menu-dropdown');
   if (!menu) return;
-  const wsMap = loadWorkspaces();
-  const names = Object.keys(wsMap).sort();
+  const list = loadWorkspaces();
   const active = localStorage.getItem(STORAGE.activeWorkspace) || "";
-  menu.innerHTML = names.length === 0
+  let html = list.length === 0
     ? '<div class="mi disabled">(no workspaces)</div>'
-    : names.map(n => `<div class="mi" data-cmd="loadWorkspace" data-ws="${escape(n)}"><span class="check">${n === active ? "✓" : ""}</span>${escape(n)}</div>`).join("");
-  menu.innerHTML += '<div class="sep"></div><div class="mi" data-cmd="manageWorkspaces">Manage Workspaces…</div>';
+    : list.map(entry => `<div class="mi" data-cmd="loadWorkspace" data-ws="${escape(entry.name)}"><span class="check">${entry.name === active ? "✓" : ""}</span>${escape(entry.name)}</div>`).join("");
+  if (active && findWorkspace(list, active)) {
+    html += `<div class="sep"></div><div class="mi" data-cmd="saveActiveWorkspace">✎ Save changes to "${escape(active)}"</div>`;
+  }
+  html += '<div class="sep"></div><div class="mi" data-cmd="manageWorkspaces">Manage Workspaces…</div>';
+  menu.innerHTML = html;
   menu.querySelectorAll(".mi[data-cmd]").forEach(mi => mi.onclick = (e) => {
     e.stopPropagation();
     document.querySelectorAll(".menu-bar .item").forEach(x => x.classList.remove("open"));
     if (mi.dataset.cmd === "manageWorkspaces") openWorkspacesModal();
+    else if (mi.dataset.cmd === "saveActiveWorkspace") saveActiveWorkspaceChanges();
     else if (mi.dataset.cmd === "loadWorkspace") {
-      applyWorkspace(wsMap[mi.dataset.ws]);
+      const entry = findWorkspace(loadWorkspaces(), mi.dataset.ws);
+      if (!entry) return;
+      applyWorkspace(entry.data);
       localStorage.setItem(STORAGE.activeWorkspace, mi.dataset.ws);
       renderWorkspacesMenu();
     }
