@@ -1123,10 +1123,10 @@ const COLUMNS = {
 };
 
 const DEFAULT_MY_COLS = ["stateIcon", "recIcon", "state", "name", "number", "duration", "queue", "wrapup", "accountCode"];
-const DEFAULT_QUEUE_COLS = ["listenIcon", "state", "name", "number", "duration", "queue", "assigned", "interactionId"];
+const DEFAULT_QUEUE_COLS = ["state", "name", "number", "duration", "queue", "assigned", "interactionId"];
 // Column keys that used to live in queue-view but are now removed. Filtered
 // out of any persisted cols on load so old localStorage entries get cleaned up.
-const REMOVED_QUEUE_COLS = new Set(["stateIcon", "recIcon", "waitReason"]);
+const REMOVED_QUEUE_COLS = new Set(["stateIcon", "recIcon", "waitReason", "listenIcon"]);
 const stripRemovedQueueCols = (arr) => Array.isArray(arr) ? arr.filter(c => !REMOVED_QUEUE_COLS.has(c)) : arr;
 let myCols = [...DEFAULT_MY_COLS];
 let queueCols = [...DEFAULT_QUEUE_COLS];
@@ -1635,10 +1635,21 @@ async function pollQueue(queueId) {
           if (!obs.conversationId || seen.has(obs.conversationId)) continue;
           seen.add(obs.conversationId);
           convIds.push(obs.conversationId);
-          // Create minimal placeholder row so the table renders immediately
           const k = d.metric === "oInteracting" ? "connected"
                   : d.metric === "oAlerting"    ? "alerting"
                   : "offering";                                   // oWaiting
+          // Only seed a placeholder for BRAND-NEW conversations. Overwriting an
+          // existing upgraded record every poll cycle wipes the resolved agent
+          // name and re-blanks the User column until the async upgrade fetch
+          // settles (and persistently if that fetch fails).
+          const existing = conversations.get(obs.conversationId);
+          if (existing) {
+            // Refresh state-y fields only; keep participant resolution intact.
+            existing.stateKey = k;
+            existing.queueId = queueId;
+            existing.queueName = queuesById.get(queueId)?.name || existing.queueName || queueId;
+            continue;
+          }
           const stateDisplay = k === "connected" ? "ACD – Assigned"
                              : k === "alerting"  ? "ACD – Alerting"
                              : "ACD – Wait Agent";
