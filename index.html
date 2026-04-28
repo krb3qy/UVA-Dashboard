@@ -1517,9 +1517,10 @@ function ingestConversation(c, hintQueueId) {
     : "";
 
   let stateDisplay = stateKey.charAt(0).toUpperCase() + stateKey.slice(1);
-  if (stateKey === "alerting" && resolvedUserName) stateDisplay = `${isAcd ? "ACD – " : ""}Alerting: ${resolvedUserName}`;
-  else if (stateKey === "connected" && resolvedUserName) stateDisplay = `${isAcd ? "ACD – " : ""}Assigned: ${resolvedUserName}`;
-  else if (stateKey === "offering") stateDisplay = `ACD – Wait Agent`;
+  if (stateKey === "alerting") stateDisplay = "Alerting";
+  else if (stateKey === "connected") stateDisplay = "Connected";
+  else if (stateKey === "offering") stateDisplay = "In Queue";
+  else if (stateKey === "held") stateDisplay = "On Hold";
 
   const startTime = primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime ||
                     agent?.connectedTime || c.dateModified || c.dateStart || Date.now();
@@ -1722,9 +1723,9 @@ async function pollQueue(queueId) {
             if (obs.direction) existing.direction = obs.direction;
             continue;
           }
-          const stateDisplay = k === "connected" ? "ACD – Assigned"
-                             : k === "alerting"  ? "ACD – Alerting"
-                             : "ACD – Wait Agent";
+          const stateDisplay = k === "connected" ? "Connected"
+                             : k === "alerting"  ? "Alerting"
+                             : "In Queue";
           const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
           conversations.set(obs.conversationId, {
             id: obs.conversationId,
