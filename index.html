@@ -2199,10 +2199,11 @@ function renderStats() {
   for (const uid of memberIds) {
     const rs = (usersById.get(uid)?.routingStatus || "").toUpperCase();
     if (rs === "OFF_QUEUE" || rs === "") offQueue++;
-    else {
-      onQueue++;
-      if (rs === "NOT_RESPONDING") notResp++;
+    else if (rs === "INTERACTING" || rs === "COMMUNICATING") {
+      // On a call — counted in onCall (conversation-based), not on-queue.
     }
+    else if (rs === "NOT_RESPONDING") notResp++;
+    else onQueue++; // IDLE / available
   }
 
   const ZERO_IF_MISSING = new Set([
