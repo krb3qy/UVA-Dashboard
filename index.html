@@ -1567,8 +1567,25 @@ function ingestConversation(c, hintQueueId) {
   const queueId = acd?.queueId || agent?.queueId || partQueueId || hintQueueId || existing?.queueId || null;
 
   const held = !!primaryCall.held;
-  let stateKey = (primaryCall.state || agent?.state || "connected").toLowerCase();
-  if (held) stateKey = "held";
+  // Agent leg is the source of truth for stateKey when present. Without a
+  // live agent leg but with an active ACD leg, the call is still queue-side
+  // (offering). Otherwise fall back to the primary call leg's state. This
+  // matters for the stats panel: queue-waiting calls have customer/ACD legs
+  // in state="connected" (connected to the queue/IVR), and we don't want to
+  // count those as Interacting.
+  const agentLegState = (agent?.state || "").toLowerCase();
+  const agentLegEnded = !!(agent?.endTime) || agentLegState === "disconnected" || agentLegState === "terminated";
+  const acdLegEnded   = !!(acd?.endTime)   || (acd?.state || "").toLowerCase() === "disconnected";
+  let stateKey;
+  if (held) {
+    stateKey = "held";
+  } else if (agent && !agentLegEnded && (agentLegState === "alerting" || agentLegState === "connected")) {
+    stateKey = agentLegState;
+  } else if (acd && !acdLegEnded) {
+    stateKey = "offering";
+  } else {
+    stateKey = (primaryCall.state || agentLegState || "connected").toLowerCase();
+  }
 
   // Resolve the assignment BEFORE building stateDisplay so the display string
   // can use the obs.userId-seeded prior name even when the upgrade payload
