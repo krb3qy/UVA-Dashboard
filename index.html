@@ -3472,7 +3472,7 @@ async function openSettings() {
     renderMyPresence();
   };
   el("addAlertRuleBtn").onclick = () => {
-    settings.alertRules.push({ queueId: "", sound: "triple", color: "#c00000", enabled: true });
+    settings.alertRules.push({ queueId: "", sound: "double", color: "#c00000", enabled: true });
     saveSettings();
     renderAlertRules();
     renderMyPresence();
@@ -3510,7 +3510,7 @@ function renderAlertRules() {
     rowEl.querySelector("[data-ar-queue]").onchange   = e => { r.queueId = e.target.value;   saveSettings(); renderMyPresence(); };
     rowEl.querySelector("[data-ar-sound]").onchange   = e => { r.sound   = e.target.value;   saveSettings(); };
     rowEl.querySelector("[data-ar-color]").oninput    = e => { r.color   = e.target.value;   saveSettings(); };
-    rowEl.querySelector("[data-ar-test]").onclick     = () => playAlertSound(r.sound || "triple");
+    rowEl.querySelector("[data-ar-test]").onclick     = () => playAlertSound(r.sound || "double");
     rowEl.querySelector("[data-ar-remove]").onclick   = () => { settings.alertRules.splice(idx, 1); saveSettings(); renderAlertRules(); renderMyPresence(); };
   });
 }
@@ -3837,7 +3837,7 @@ function loadSettings() {
     if (loaded.emergencyQueueId && !Array.isArray(loaded.alertRules)) {
       loaded.alertRules = [{
         queueId: loaded.emergencyQueueId,
-        sound: "triple",
+        sound: "double",
         color: "#c00000",
         enabled: true
       }];
@@ -4945,7 +4945,7 @@ function showEmergencyAlert(row, rule) {
   if (activeAlerts.has(row.id)) return;
   activeAlerts.set(row.id, { rule, addedAt: Date.now() });
   renderEmergencyAlertBanner();
-  startAlertSoundLoop(rule.sound || "triple");
+  startAlertSoundLoop(rule.sound || "double");
 }
 
 function ensureEmergencyAlertHost() {
@@ -5004,12 +5004,20 @@ function stopAlertSoundLoop() {
   if (alertSoundLoopTimer) { clearInterval(alertSoundLoopTimer); alertSoundLoopTimer = null; }
 }
 
-// Sound preset library — pure WebAudio synthesis (no file deps), same
-// approach as Alert-Extension-v2's offscreen.js. Each preset describes a
-// short envelope; playAlertSound looks up by id.
+// Sound preset library — pure WebAudio synthesis (no file deps).
+// `double` is the literal Alert-Extension-v2/offscreen.js pattern:
+// 880Hz + 1100Hz oscillators playing SIMULTANEOUSLY through a shared
+// gain envelope that fires two bursts (0–150ms and 250–400ms). The 1.5s
+// repeat cadence is handled by startAlertSoundLoop. Other presets are
+// alternates the user can pick per queue.
 const ALERT_SOUNDS = {
+  double: { name: "Double Beep", dualTone: {
+    freqs: [880, 1100],
+    bursts: [{ on: 0, off: 0.15 }, { on: 0.25, off: 0.40 }],
+    duration: 0.5,
+    gain: 0.4
+  }},
   chime:  { name: "Chime",         beeps: [{ f: 880,  dur: 0.20 }] },
-  double: { name: "Double Beep",   beeps: [{ f: 880,  dur: 0.15 }, { f: 1100, dur: 0.15, delay: 0.25 }] },
   triple: { name: "Triple Beep",   beeps: [{ f: 880,  dur: 0.22 }, { f: 880,  dur: 0.22, delay: 0.35 }, { f: 880, dur: 0.22, delay: 0.70 }] },
   klaxon: { name: "Klaxon",        beeps: [{ f: 600,  dur: 0.25 }, { f: 900,  dur: 0.25, delay: 0.30 }, { f: 600, dur: 0.25, delay: 0.60 }, { f: 900, dur: 0.25, delay: 0.90 }] },
   siren:  { name: "Siren Sweep",   sweep: { from: 400, to: 1000, dur: 1.5 } },
@@ -5021,7 +5029,27 @@ function playAlertSound(soundId) {
   if (!alertAudioCtx) alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const ctx = alertAudioCtx;
   const start = ctx.currentTime;
-  const preset = ALERT_SOUNDS[soundId] || ALERT_SOUNDS.triple;
+  const preset = ALERT_SOUNDS[soundId] || ALERT_SOUNDS.double;
+  // Dual-tone-with-gain-envelope (matches Alert-Extension-v2/offscreen.js).
+  if (preset.dualTone) {
+    const cfg = preset.dualTone;
+    const burstGain = ctx.createGain();
+    burstGain.connect(ctx.destination);
+    burstGain.gain.value = 0; // start silent — bursts schedule values below
+    for (const f of cfg.freqs) {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = f;
+      osc.connect(burstGain);
+      osc.start(start);
+      osc.stop(start + cfg.duration);
+    }
+    for (const b of cfg.bursts) {
+      burstGain.gain.setValueAtTime(cfg.gain, start + b.on);
+      burstGain.gain.setValueAtTime(0,         start + b.off);
+    }
+    return;
+  }
   if (preset.sweep) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
