@@ -412,7 +412,6 @@
         <div class="mi" data-cmd="toggleSidebar"><span class="check" id="checkSidebar">✓</span>Workgroup Statistics</div>
         <div class="mi" data-cmd="toggleDirectory"><span class="check" id="checkDir">✓</span>Directory</div>
         <div class="sep"></div>
-        <div class="mi" data-cmd="manageQueueTabs">Manage Queue Tabs…</div>
         <div class="mi" data-cmd="customizeCols">Customize Columns…</div>
         <div class="mi" data-cmd="reload">Refresh</div>
       </div>
@@ -687,31 +686,6 @@
   </div>
 </div>
 
-<!-- MANAGE QUEUE TABS MODAL -->
-<div id="manageQueueTabsModal" class="modal-backdrop">
-  <div class="modal">
-    <div class="titlebar"><span>Manage Queue Tabs</span><span class="sp"></span><span class="x" data-close>✕</span></div>
-    <div class="body">
-      <label>Monitored queues — check to watch; each queue starts in its own tab</label>
-      <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
-      <div id="queueList" style="max-height:30vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
-
-      <label style="margin-top:14px">Tabs — each tab can hold one queue or many</label>
-      <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
-        Combine checked queues into one tab, or click <strong>Queues (N)</strong> on any existing
-        tab to add more queues to it.
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:6px">
-        <button class="btn btn-sm" id="combineCheckedBtn" disabled>Combine checked queues into one tab</button>
-        <button class="btn btn-sm" id="createGroupBtn">+ Create custom tab…</button>
-      </div>
-      <div id="tabGroupsList" style="max-height:30vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-    </div>
-    <div class="actions">
-      <button class="btn btn-primary" id="manageQueueTabsClose">OK</button>
-    </div>
-  </div>
-</div>
 
 <!-- BLIND TRANSFER MODAL -->
 <div id="transferModal" class="modal-backdrop">
@@ -3356,25 +3330,10 @@ function refreshExtensionStatus() {
   }
 }
 
-async function openManageQueueTabs() {
-  openModal("manageQueueTabsModal");
-  el("queueSearch").value = "";
-  const list = el("queueList");
-  list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>Loading queues…</div>";
-  try {
-    if (queuesById.size < 3) await fetchAllQueues();
-    if (divisionsById.size === 0) await fetchAllDivisions();
-    renderQueueList("");
-    renderTabGroupsSection();
-  } catch (e) {
-    list.innerHTML = `<div style='padding:8px;color:#c00'>Queue load failed: ${escape(e.message)}</div>`;
-  }
-  el("queueSearch").oninput = () => renderQueueList(el("queueSearch").value);
-  el("manageQueueTabsClose").onclick = () => closeModal("manageQueueTabsModal");
-}
 
 function renderQueueList(filter) {
   const list = el("queueList");
+  if (!list) return;   // host modal not in DOM (queue-tab management removed)
   const f = (filter || "").trim().toLowerCase();
   const watched = new Set(selectedQueueIds);
   const all = [...queuesById.values()]
@@ -3743,7 +3702,6 @@ function handleMenuCmd(cmd) {
     case "toggleDirectory": toggleDir(); break;
     case "customizeCols": openColsModal(); break;
     case "reload": location.reload(); break;
-    case "manageQueueTabs": openManageQueueTabs(); break;
     case "popout": triggerPopout(); break;
     case "popin":
       if (isPopoutMode()) window.close();
