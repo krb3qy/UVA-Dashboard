@@ -2222,31 +2222,35 @@ function renderToolbar() {
 //   can sum them when it wants a total.
 // Time-based observation metrics: stats.calculatedMetricValue is the
 // epoch-ms START TIME of the longest-running observation (NOT a duration).
-// Elapsed seconds = (Date.now() - calculatedMetricValue) / 1000. count=0
-// means no observation, so the field is absent.
+// We store the raw start time as <metric>_startMs so the UI can tick
+// (Date.now() - startMs) every second without going stale — the start
+// time is server-authoritative. count=0 ⇒ no observation, so we clear
+// the stored start so the display drops back to "—".
 const TIME_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
 function flattenObservationEvent(body) {
   const out = {};
   const addValue = (metric, qualifier, stats, obsArr) => {
     if (!metric) return;
-    let v = null;
-    if (stats) {
-      if (TIME_METRICS.has(metric)) {
-        if (stats.count > 0 && typeof stats.calculatedMetricValue === "number") {
-          v = Math.max(0, (Date.now() - stats.calculatedMetricValue) / 1000);
-        }
-      } else {
-        v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
-      }
-    }
-    if (v === null && Array.isArray(obsArr)) v = obsArr.length;
-    if (typeof v !== "number") return;
     const key = qualifier ? `${metric}_${qualifier}` : metric;
     if (TIME_METRICS.has(metric)) {
-      out[key] = Math.max(out[key] || 0, v);  // max across mediaType groups
-    } else {
-      out[key] = (out[key] || 0) + v;          // sum (e.g. count of waiting calls)
+      const startKey = key + "_startMs";
+      if (stats && stats.count > 0 && typeof stats.calculatedMetricValue === "number") {
+        // Earliest start time across mediaType groups in this body =
+        // longest wait.
+        const prior = out[startKey];
+        out[startKey] = (typeof prior === "number")
+          ? Math.min(prior, stats.calculatedMetricValue)
+          : stats.calculatedMetricValue;
+      } else if (stats && stats.count === 0 && !(startKey in out)) {
+        out[startKey] = null;  // server says nothing waiting — clear
+      }
+      return;
     }
+    let v = null;
+    if (stats) v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
+    if (v === null && Array.isArray(obsArr)) v = obsArr.length;
+    if (typeof v !== "number") return;
+    out[key] = (out[key] || 0) + v;          // sum (e.g. count of waiting calls)
   };
   const results = body?.results;
   if (Array.isArray(results)) {
@@ -2328,31 +2332,32 @@ function renderStats() {
   const tabQids = new Set(qids);
   const s = {};
   let oWaiting = 0, oAlerting = 0, oInteracting = 0;
-  let longestWaitMs = 0, longestInteractingMs = 0;
-  const now = Date.now();
   for (const conv of conversations.values()) {
     if (conv.disconnected) continue;
     if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
-    if (conv.stateKey === "offering") {
-      oWaiting++;
-      // From the customer's perspective they're still waiting until a live
-      // agent picks up — count both offering AND alerting calls toward the
-      // longest-wait timer. Pharm queues route to agents fast enough that
-      // 'offering' alone almost never has duration to display.
-      longestWaitMs = Math.max(longestWaitMs, now - (conv.queueEnterMs || conv.startTimeMs || now));
-    } else if (conv.stateKey === "alerting") {
-      oAlerting++;
-      longestWaitMs = Math.max(longestWaitMs, now - (conv.queueEnterMs || conv.startTimeMs || now));
-    } else if (conv.stateKey === "connected" || conv.stateKey === "held") {
-      oInteracting++;
-      longestInteractingMs = Math.max(longestInteractingMs, now - (conv.startTimeMs || now));
-    }
+    if (conv.stateKey === "offering") oWaiting++;
+    else if (conv.stateKey === "alerting") oAlerting++;
+    else if (conv.stateKey === "connected" || conv.stateKey === "held") oInteracting++;
   }
   s.oWaiting = oWaiting;
   s.oAlerting = oAlerting;
   s.oInteracting = oInteracting;
-  if (oWaiting + oAlerting > 0) s.oLongestWaiting     = longestWaitMs / 1000;
-  if (oInteracting > 0)         s.oLongestInteracting = longestInteractingMs / 1000;
+
+  // Longest Wait / Longest Interacting: server-authoritative. The poll/WS
+  // pushes the epoch-ms start time of the longest-running observation per
+  // queue (or null when the queue has none). We pick the earliest across
+  // all queues in the tab (= longest current wait/interact) and the UI
+  // ticks (now - startMs) once a second.
+  let oldestWaitStart = null, oldestInteractStart = null;
+  for (const q of qids) {
+    const qs = queueStats.get(q) || {};
+    const w = qs.oLongestWaiting_startMs;
+    const i = qs.oLongestInteracting_startMs;
+    if (typeof w === "number") oldestWaitStart = oldestWaitStart === null ? w : Math.min(oldestWaitStart, w);
+    if (typeof i === "number") oldestInteractStart = oldestInteractStart === null ? i : Math.min(oldestInteractStart, i);
+  }
+  if (oldestWaitStart     !== null) s.oLongestWaiting     = (Date.now() - oldestWaitStart)     / 1000;
+  if (oldestInteractStart !== null) s.oLongestInteracting = (Date.now() - oldestInteractStart) / 1000;
 
   const memberIds = new Set();
   for (const q of qids) {
@@ -2903,12 +2908,11 @@ function startDurationTick() {
   durationTickTimer = setInterval(() => {
     renderMy();
     renderQueue();
-    // Stats panel intentionally NOT re-rendered every second — a 1Hz tick
-    // means any stale conv lingering in the cache (e.g. a call whose
-    // transition WS event was missed) would cause Longest Wait to count
-    // up forever, even when the queue tab list shows no waiting calls.
-    // The stats panel updates on real WS events instead, so it can never
-    // disagree with the rows you see.
+    // Stats Longest Wait / Longest Interacting tick from server-authoritative
+    // start times (oLongestWaiting_startMs). When the server says count=0
+    // for a queue, we clear the start in flattenObservationEvent so the UI
+    // drops back to "—" — no client-cache phantom counter possible.
+    renderStats();
     for (const [cid, w] of callWidgets) {
       const row = conversations.get(cid);
       if (!row) continue;
