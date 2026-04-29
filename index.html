@@ -2834,7 +2834,8 @@ async function conferenceSelectedQueueCalls() {
   const btn = el("queueActionBarConference");
   if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
   try {
-    // Step 1: assign every selected queue call to me (skip ones I'm already on).
+    // Step 1 — assign every selected queue call to me (skip ones I'm
+    // already on).
     const toAssign = ids.filter(id => {
       const r = conversations.get(id);
       return r && !r.hasMe && !r.disconnected;
@@ -2845,16 +2846,17 @@ async function conferenceSelectedQueueCalls() {
         showBanner({ type: "error", title: "Assign failed", message: `${id}: ${e.message}`, autoHideMs: 5000 });
       }
     }
-    // Wait for delivery so hasMe flips on the cached conversations.
-    await new Promise(r => setTimeout(r, 2500));
-
-    // Step 2: union of originally-selected ids + any of mine that came online
-    // (assign delivers via WS; the cache may have updated by now).
-    const mine = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
-    const targetSet = new Set([...ids, ...mine]);
-    const finalIds = [...targetSet];
+    // Step 2 — wait for delivery, then re-fetch /api/v2/conversations
+    // (don't trust the local cache). Mirror IW-Merge's pattern: only
+    // ids the API now reports as ours are eligible to merge.
+    if (toAssign.length > 0) {
+      await new Promise(r => setTimeout(r, 3000));
+      await seedMyInteractions();
+    }
+    const myIds = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
+    const finalIds = [...new Set(myIds)];
     if (finalIds.length < 2) {
-      showBanner({ type: "warn", title: "Nothing to merge", message: "No active calls available after assignment.", autoHideMs: 4000 });
+      showBanner({ type: "warn", title: "Nothing to merge", message: "No active calls of yours after assignment.", autoHideMs: 4000 });
       return;
     }
     await mergeMany(finalIds);
@@ -3387,21 +3389,41 @@ function openMergeModal(row) {
   el("mergeGo").onclick = async () => {
     const status = el("mergeStatus");
     try {
-      // Step 1: assign any queue calls to me
+      // Step 1 — assign queue calls to me. GC's /conference endpoint
+      // requires a common user across all active participants, so we
+      // can't merge raw queue calls directly.
+      const assignFailed = [];
       if (queuedSel.size > 0) {
         status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
         for (const qid of queuedSel) {
           try { await assignCallToMe(qid); }
-          catch (e) { status.textContent = `Assign failed for ${qid}: ${e.message}`; }
+          catch (e) { assignFailed.push({ id: qid, err: e.message }); }
         }
-        // Wait for delivery
-        await new Promise(r => setTimeout(r, 2500));
+        // Wait for ACD routing to deliver the assigned calls. IW-Merge
+        // waits 3s here — match that.
+        status.textContent = `Waiting for ${queuedSel.size} call(s) to deliver…`;
+        await new Promise(r => setTimeout(r, 3000));
       }
-      // Step 2: collect every current "my" call id, merge them
-      const afterMine = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
-      const targetSet = new Set([...sel, ...queuedSel, ...afterMine]);
-      const ids = [...targetSet];
-      if (ids.length < 2) { status.textContent = "Not enough calls to merge."; return; }
+      // Step 2 — re-fetch the user's active conversations from the API
+      // (NOT the local cache, which can lag the assign event). This is
+      // the IW-Merge pattern — the only ids we trust as 'I am a
+      // participant' are the ones in /api/v2/conversations.
+      status.textContent = "Refreshing active calls…";
+      await seedMyInteractions();
+      const myIds = [...conversations.values()]
+        .filter(r => r.hasMe && !r.disconnected)
+        .map(r => r.id);
+      // Build the merge target set: my pre-existing selections (sel)
+      // plus everything the API now reports as mine after the assign.
+      const ids = [...new Set([...sel, ...myIds])];
+      if (ids.length < 2) {
+        const why = assignFailed.length
+          ? `Not enough calls. Assign failures: ${assignFailed.map(f => f.err).join('; ')}`
+          : "Not enough calls to merge after assignment.";
+        status.textContent = why;
+        showBanner({ type: "error", title: "Merge failed", message: why, autoHideMs: 6000 });
+        return;
+      }
       status.textContent = `Merging ${ids.length} calls…`;
       await mergeMany(ids);
       showBanner({ type: "info", title: "Merge requested", message: `Conferenced ${ids.length} calls.`, autoHideMs: 3000 });
@@ -4912,30 +4934,74 @@ function maybeFireEmergencyAlert(row) {
   showEmergencyAlert(row, rule);
 }
 
+// Multi-call alert state. Map<convId, {rule, addedAt}> — every watched
+// queue call alerting at the same time gets its own row in the banner,
+// each with its own Pick Up + Dismiss buttons. Dismissing one row only
+// removes that row; sound keeps looping until ALL are gone.
+let activeAlerts = new Map();
+let alertSoundLoopTimer = null;
+
 function showEmergencyAlert(row, rule) {
-  activeAlertConvId = row.id;
+  if (activeAlerts.has(row.id)) return;
+  activeAlerts.set(row.id, { rule, addedAt: Date.now() });
+  renderEmergencyAlertBanner();
+  startAlertSoundLoop(rule.sound || "triple");
+}
+
+function ensureEmergencyAlertHost() {
   let host = el("emergencyAlertHost");
-  if (!host) {
-    host = document.createElement("div");
-    host.id = "emergencyAlertHost";
-    host.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:900;display:flex;align-items:center;justify-content:center;padding:10px 16px;color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 10px rgba(0,0,0,.35);gap:16px;animation:emFlash 1s steps(2) infinite";
-    const style = document.createElement("style");
-    // Brightness pulse works regardless of the rule's chosen color.
-    style.textContent = "@keyframes emFlash { 50% { filter: brightness(1.4); } }";
-    document.head.appendChild(style);
-    document.body.appendChild(host);
+  if (host) return host;
+  host = document.createElement("div");
+  host.id = "emergencyAlertHost";
+  host.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:900;display:flex;flex-direction:column;color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 10px rgba(0,0,0,.35);animation:emFlash 1s steps(2) infinite";
+  const style = document.createElement("style");
+  // Brightness pulse — keeps each row's chosen color visible while flashing.
+  style.textContent = "@keyframes emFlash { 50% { filter: brightness(1.4); } }";
+  document.head.appendChild(style);
+  document.body.appendChild(host);
+  return host;
+}
+
+function renderEmergencyAlertBanner() {
+  const host = ensureEmergencyAlertHost();
+  if (activeAlerts.size === 0) {
+    host.style.display = "none";
+    host.innerHTML = "";
+    return;
   }
-  const queueName = queuesById.get(row.queueId)?.name || row.queueId;
-  host.style.background = rule.color || "#c00000";
-  host.innerHTML = `
-    <span>🚨 ${escape(queueName)}</span>
-    <span style="font-weight:400">${escape(row.name || row.number || row.id)}</span>
-    <button class="btn" id="emPickup" style="color:#000">Pick Up</button>
-    <button class="btn" id="emDismiss" style="color:#000">Dismiss</button>`;
   host.style.display = "flex";
-  el("emPickup").onclick = async () => { try { await doAction("pickup", conversations.get(row.id)); } catch {} dismissEmergencyAlert(); };
-  el("emDismiss").onclick = dismissEmergencyAlert;
-  try { playAlertSound(rule.sound || "triple"); } catch {}
+  host.innerHTML = [...activeAlerts.entries()].map(([convId, { rule }]) => {
+    const r = conversations.get(convId) || {};
+    const qName = queuesById.get(r.queueId)?.name || r.queueId || "";
+    const caller = r.name || r.number || convId;
+    return `<div class="em-row" style="background:${escape(rule.color || '#c00000')};display:flex;align-items:center;padding:10px 16px;gap:16px;border-bottom:1px solid rgba(0,0,0,.18)">
+      <span>🚨 ${escape(qName)}</span>
+      <span style="font-weight:400">${escape(caller)}</span>
+      <span style="flex:1"></span>
+      <button class="btn em-pickup" data-conv="${escape(convId)}" style="color:#000">Pick Up</button>
+      <button class="btn em-dismiss" data-conv="${escape(convId)}" style="color:#000">Dismiss</button>
+    </div>`;
+  }).join("");
+  host.querySelectorAll(".em-pickup").forEach(b => b.onclick = async () => {
+    const cid = b.dataset.conv;
+    try { await doAction("pickup", conversations.get(cid)); } catch {}
+    dismissAlertConv(cid);
+  });
+  host.querySelectorAll(".em-dismiss").forEach(b => b.onclick = () => dismissAlertConv(b.dataset.conv));
+}
+
+function startAlertSoundLoop(soundId) {
+  // Mirror Alert-Extension-v2/offscreen.js: play immediately, then re-fire
+  // every 1500ms until stopped. Keeps the audible nudge going for a
+  // multi-call banner instead of fading after one burst.
+  stopAlertSoundLoop();
+  try { playAlertSound(soundId); } catch {}
+  alertSoundLoopTimer = setInterval(() => {
+    try { playAlertSound(soundId); } catch {}
+  }, 1500);
+}
+function stopAlertSoundLoop() {
+  if (alertSoundLoopTimer) { clearInterval(alertSoundLoopTimer); alertSoundLoopTimer = null; }
 }
 
 // Sound preset library — pure WebAudio synthesis (no file deps), same
@@ -4982,16 +5048,39 @@ function playAlertSound(soundId) {
   }
 }
 
+function dismissAlertConv(convId) {
+  if (!activeAlerts.has(convId)) return;
+  activeAlerts.delete(convId);
+  if (activeAlerts.size === 0) {
+    stopAlertSoundLoop();
+  }
+  renderEmergencyAlertBanner();
+}
+
 function dismissEmergencyAlert() {
+  // Legacy entry — clears the entire banner.
+  activeAlerts.clear();
   activeAlertConvId = null;
-  const host = el("emergencyAlertHost");
-  if (host) host.style.display = "none";
+  stopAlertSoundLoop();
+  renderEmergencyAlertBanner();
 }
 
 function checkEmergencyAlertStillActive() {
-  if (!activeAlertConvId) return;
-  const r = conversations.get(activeAlertConvId);
-  if (!r || r.disconnected || r.hasMe) dismissEmergencyAlert();
+  // Prune any active alert whose conversation has ended or been answered
+  // by the user themselves. Sound stops automatically when the last alert
+  // is gone.
+  let changed = false;
+  for (const cid of [...activeAlerts.keys()]) {
+    const r = conversations.get(cid);
+    if (!r || r.disconnected || r.hasMe) {
+      activeAlerts.delete(cid);
+      changed = true;
+    }
+  }
+  if (changed) {
+    if (activeAlerts.size === 0) stopAlertSoundLoop();
+    renderEmergencyAlertBanner();
+  }
 }
 
 function toggleAlertMode() {
