@@ -333,7 +333,8 @@
 
     /* -------- Context menu (row + column) -------- */
     .ctx-menu { position: fixed; background: #f1f1f1; border: 1px solid var(--win-border);
-      padding: 2px 0; min-width: 160px; z-index: 800; display: none;
+      padding: 2px 0; min-width: 160px; max-height: calc(100vh - 20px);
+      overflow-y: auto; z-index: 800; display: none;
       box-shadow: 3px 3px 6px rgba(0,0,0,.3); font-size: 12px; }
     .ctx-menu.active { display: block; }
     .ctx-menu .item { padding: 3px 18px; cursor: default; display: flex; align-items: center; gap: 8px; }
@@ -4163,7 +4164,8 @@ function showTabContextMenu(x, y, tabId, paneId) {
     `<div class="item" data-tab-act="rename">Rename tab…</div>` +
     `<div class="sep"></div>` +
     `<div class="item danger" data-tab-act="remove">Remove tab</div>`;
-  menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+  menu.classList.add("active");
+  positionCtxMenu(menu, x, y);
   menu.querySelectorAll("[data-tab-act]").forEach(n => n.onclick = () => {
     menu.classList.remove("active");
     const act = n.dataset.tabAct;
@@ -4219,11 +4221,29 @@ function showRowContextMenu(x, y) {
   menu.innerHTML = items.map(i => i.sep
     ? `<div class="sep"></div>`
     : `<div class="item ${i.danger ? 'danger' : ''}" data-act="${i.act}">${escape(i.label)}</div>`).join("");
-  menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+  menu.classList.add("active");
+  positionCtxMenu(menu, x, y);
   menu.querySelectorAll(".item[data-act]").forEach(n => n.addEventListener("click", () => {
     menu.classList.remove("active");
     doAction(n.dataset.act, conversations.get(selectedCallId));
   }));
+}
+
+// Position a fixed-position context menu at (x, y) but clamp into the
+// viewport so the bottom (or right edge) doesn't get cut off when the
+// click lands near a panel edge. Call AFTER setting menu.classList.add
+// ("active") so the rect can be measured.
+function positionCtxMenu(menu, x, y) {
+  menu.style.left = x + "px";
+  menu.style.top  = y + "px";
+  const rect = menu.getBoundingClientRect();
+  const margin = 6;
+  if (rect.bottom > window.innerHeight - margin) {
+    menu.style.top = Math.max(margin, window.innerHeight - rect.height - margin) + "px";
+  }
+  if (rect.right > window.innerWidth - margin) {
+    menu.style.left = Math.max(margin, window.innerWidth - rect.width - margin) + "px";
+  }
 }
 
 function showColumnHeaderMenu(x, y, scope) {
@@ -4238,14 +4258,25 @@ function showColumnHeaderMenu(x, y, scope) {
     if (scope === "my") { myCols = [...DEFAULT_MY_COLS]; saveCols(); }
     else resetQueueCols(activeTabQueueId);
   };
-  const scopeLabel = scope === "my" ? "My Interactions"
-    : activeTabQueueId ? (queuesById.get(activeTabQueueId)?.name || activeTabQueueId) : "Queue";
+  // Header label: for the queue scope, prefer the active tab's name (e.g.
+  // a group tab like "Pharm") over the underlying first-queue's name. The
+  // user picked the tab; that's what they should see.
+  let scopeLabel;
+  if (scope === "my") {
+    scopeLabel = "My Interactions";
+  } else {
+    const t = activeTab();
+    scopeLabel = t?.name
+      ? t.name
+      : (activeTabQueueId ? (queuesById.get(activeTabQueueId)?.name || activeTabQueueId) : "Queue");
+  }
   menu.innerHTML = `<div class="item disabled" style="font-weight:600">${escape(scopeLabel)}</div><div class="sep"></div>` +
     Object.entries(COLUMNS).map(([k, c]) => {
       const on = list.includes(k);
       return `<div class="item" data-colkey="${k}"><span class="check">${on ? "✓" : ""}</span>${escape(c.label || k)}</div>`;
     }).join("") + `<div class="sep"></div><div class="item" data-colkey="__reset">Reset to defaults</div>`;
-  menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+  menu.classList.add("active");
+  positionCtxMenu(menu, x, y);
   menu.querySelectorAll(".item[data-colkey]").forEach(n => n.addEventListener("click", () => {
     const k = n.dataset.colkey;
     if (k === "__reset") {
@@ -5005,7 +5036,8 @@ async function openAcdStatusMenu(x, y) {
       const label = d.languageLabels?.en_US || d.systemPresence || d.id;
       return `<div class="item" data-presence-id="${escape(d.id)}">${escape(label)}</div>`;
     }).join("");
-    menu.style.left = x + "px"; menu.style.top = y + "px"; menu.classList.add("active");
+    menu.classList.add("active");
+    positionCtxMenu(menu, x, y);
     menu.querySelectorAll("[data-presence-id]").forEach(n => n.onclick = async () => {
       menu.classList.remove("active");
       try {
