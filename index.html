@@ -2840,6 +2840,14 @@ async function conferenceSelectedQueueCalls() {
       const r = conversations.get(id);
       return r && !r.hasMe && !r.disconnected;
     });
+    // Pre-check: surface a clear reason if the assign would fail.
+    for (const id of toAssign) {
+      const why = assignEligibilityError(id);
+      if (why) {
+        showBanner({ type: "error", title: "Can't assign call", message: why, autoHideMs: 7000 });
+        return;
+      }
+    }
     for (const id of toAssign) {
       try { await assignCallToMe(id); }
       catch (e) {
@@ -3394,6 +3402,16 @@ function openMergeModal(row) {
       // can't merge raw queue calls directly.
       const assignFailed = [];
       if (queuedSel.size > 0) {
+        // Local pre-check — bail with a clear message before the API call
+        // if the user is missing a station, off queue, or not a queue member.
+        for (const qid of queuedSel) {
+          const why = assignEligibilityError(qid);
+          if (why) {
+            status.textContent = why;
+            showBanner({ type: "error", title: "Can't assign call", message: why, autoHideMs: 7000 });
+            return;
+          }
+        }
         status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
         for (const qid of queuedSel) {
           try { await assignCallToMe(qid); }
@@ -4383,6 +4401,31 @@ async function mergeMany(convIds) {
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
   await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+}
+
+// GC's /assign endpoint refuses with "Targeted User ID is not valid" when
+// the requester doesn't have an associated station, isn't on queue, or
+// isn't a member of the queue the call sits in. Pre-check those locally
+// so we surface a clear reason instead of throwing the raw 400.
+function assignEligibilityError(convId) {
+  if (!currentUser?.id) return "Not signed in.";
+  if (!currentUser.station) {
+    return "You don't have an associated station. Pick one in the Genesys client (Settings ▸ Phone) and try again.";
+  }
+  const me = usersById.get(currentUser.id) || {};
+  const rs = (me.routingStatus || "").toUpperCase();
+  if (rs === "OFF_QUEUE" || rs === "") {
+    return "You're Off Queue. Switch to On Queue in the Genesys client to take queue calls.";
+  }
+  const conv = conversations.get(convId);
+  if (conv?.queueId) {
+    const members = queueMembers.get(conv.queueId);
+    if (members && !members.has(currentUser.id)) {
+      const qName = queuesById.get(conv.queueId)?.name || conv.queueId;
+      return `You're not a member of ${qName}, so the queue can't assign its calls to you.`;
+    }
+  }
+  return null;
 }
 
 // Add a participant (phone number) to an existing call conversation.
