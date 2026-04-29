@@ -662,15 +662,26 @@
     <div class="body">
       <label>Alert delivery</label>
       <select id="alertModeSel">
-        <option value="auto">Auto (dashboard when extension absent)</option>
+        <option value="auto">Auto (detects browser vs. embedded)</option>
         <option value="dashboard">Dashboard only</option>
         <option value="extension">Extension only</option>
         <option value="both">Both (may double-alert)</option>
         <option value="off">Off</option>
       </select>
+      <div style="font-size:11px;color:var(--win-muted);margin-top:4px">
+        Auto: in-dashboard banner when running embedded as a Client App;
+        otherwise extension if installed, else dashboard.
+      </div>
 
-      <label style="margin-top:12px">Emergency queue (fires alert when a call arrives)</label>
-      <select id="emergencyQueueSel"><option value="">(none)</option></select>
+      <label style="margin-top:12px;display:flex;align-items:center;gap:8px">
+        <span>Queue alerts</span>
+        <button class="btn btn-sm" id="addAlertRuleBtn">+ Add</button>
+      </label>
+      <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
+        Pick a queue, sound, and banner color. The alert fires when a new
+        call enters the queue (and you're not already on it).
+      </div>
+      <div id="alertRulesList"></div>
 
       <label style="margin-top:12px">Alert-Extension-v2 ID <span id="extensionStatus" style="font-weight:normal;color:var(--win-muted);margin-left:6px"></span></label>
       <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
@@ -1145,7 +1156,7 @@ const queueViewSelectedIds = new Set();   // queue-view rows multi-selected for 
 let selectedDirUserId = null;
 let settings = {
   extensionId: "",
-  emergencyQueueId: "",
+  alertRules: [],           // [{queueId, sound, color, enabled}]
   alertMode: "auto"         // auto | dashboard | extension | both | off
 };
 let activeMyTab = "interactions";     // "interactions" | "history"
@@ -3289,21 +3300,19 @@ async function openWrapupModal(row) {
   };
 }
 
-// Settings — alert delivery, emergency queue, alert-extension ID. Anything
-// to do with queue/tab management lives in openManageQueueTabs().
+// Settings — alert delivery, per-queue alert rules, alert-extension ID.
 async function openSettings() {
   openModal("settingsModal");
   el("extensionIdInput").value = settings.extensionId || "";
   el("alertModeSel").value = settings.alertMode || "auto";
-  // Emergency-queue dropdown — populate from full queue list (lazy fetch).
-  try {
-    if (queuesById.size < 3) await fetchAllQueues();
-    const emg = el("emergencyQueueSel");
-    emg.innerHTML = '<option value="">(none)</option>' +
-      [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-        .map(q => `<option value="${escape(q.id)}" ${q.id === settings.emergencyQueueId ? "selected" : ""}>${escape(q.name)}</option>`).join("");
-    emg.onchange = () => { settings.emergencyQueueId = emg.value; saveSettings(); };
-  } catch {}
+  if (!Array.isArray(settings.alertRules)) settings.alertRules = [];
+  try { if (queuesById.size < 3) await fetchAllQueues(); } catch {}
+  renderAlertRules();
+  el("addAlertRuleBtn").onclick = () => {
+    settings.alertRules.push({ queueId: "", sound: "triple", color: "#c00000", enabled: true });
+    saveSettings();
+    renderAlertRules();
+  };
   el("alertModeSel").onchange = () => { settings.alertMode = el("alertModeSel").value; saveSettings(); renderMyPresence(); };
   el("extensionIdInput").oninput = () => {
     settings.extensionId = el("extensionIdInput").value.trim();
@@ -3312,6 +3321,41 @@ async function openSettings() {
   };
   refreshExtensionStatus();
   el("settingsClose").onclick = () => closeModal("settingsModal");
+}
+
+function renderAlertRules() {
+  const host = el("alertRulesList");
+  if (!host) return;
+  const rules = settings.alertRules || [];
+  if (rules.length === 0) {
+    host.innerHTML = '<div style="font-size:11px;color:var(--win-muted);padding:8px;border:1px dashed var(--win-border);text-align:center">No queue alerts configured. Click + Add to set one up.</div>';
+    return;
+  }
+  const sortedQueues = [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  host.innerHTML = rules.map((r, i) => {
+    const qOpts = '<option value="">— select queue —</option>' +
+      sortedQueues.map(q => `<option value="${escape(q.id)}" ${q.id === r.queueId ? "selected" : ""}>${escape(q.name)}</option>`).join("");
+    const sOpts = Object.entries(ALERT_SOUNDS).map(([k, v]) =>
+      `<option value="${k}" ${k === r.sound ? "selected" : ""}>${escape(v.name)}</option>`).join("");
+    return `<div class="alert-rule-row" data-idx="${i}" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:4px;border:1px solid var(--win-border);background:#fafafa">
+      <input type="checkbox" data-ar-enabled ${r.enabled ? "checked" : ""} title="Enabled" />
+      <select data-ar-queue style="flex:1;min-width:120px">${qOpts}</select>
+      <select data-ar-sound>${sOpts}</select>
+      <button class="btn btn-sm" data-ar-test title="Preview sound">▶</button>
+      <input type="color" data-ar-color value="${escape(r.color || '#c00000')}" title="Banner color" style="width:30px;height:24px;padding:0;border:1px solid var(--win-border);cursor:pointer" />
+      <button class="btn btn-sm" data-ar-remove title="Remove">×</button>
+    </div>`;
+  }).join("");
+  host.querySelectorAll(".alert-rule-row").forEach(rowEl => {
+    const idx = +rowEl.dataset.idx;
+    const r = settings.alertRules[idx];
+    rowEl.querySelector("[data-ar-enabled]").onchange = e => { r.enabled = e.target.checked; saveSettings(); };
+    rowEl.querySelector("[data-ar-queue]").onchange   = e => { r.queueId = e.target.value;   saveSettings(); };
+    rowEl.querySelector("[data-ar-sound]").onchange   = e => { r.sound   = e.target.value;   saveSettings(); };
+    rowEl.querySelector("[data-ar-color]").oninput    = e => { r.color   = e.target.value;   saveSettings(); };
+    rowEl.querySelector("[data-ar-test]").onclick     = () => playAlertSound(r.sound || "triple");
+    rowEl.querySelector("[data-ar-remove]").onclick   = () => { settings.alertRules.splice(idx, 1); saveSettings(); renderAlertRules(); };
+  });
 }
 
 function refreshExtensionStatus() {
@@ -3635,12 +3679,24 @@ function openColsModal() {
 //  Settings persistence
 // ================================================================
 function loadSettings() {
-  const defaults = { extensionId: "", emergencyQueueId: "", alertMode: "auto" };
+  const defaults = { extensionId: "", alertRules: [], alertMode: "auto" };
   try {
     const loaded = JSON.parse(localStorage.getItem(STORAGE.settings) || "{}");
     // Drop legacy supervisorOverride if present in stored settings — role
     // gating is now driven solely by the actual GC role assignment.
     delete loaded.supervisorOverride;
+    // Migrate legacy single-queue emergency alert into the new alertRules
+    // shape: existing users keep their alert as one auto-converted rule.
+    if (loaded.emergencyQueueId && !Array.isArray(loaded.alertRules)) {
+      loaded.alertRules = [{
+        queueId: loaded.emergencyQueueId,
+        sound: "triple",
+        color: "#c00000",
+        enabled: true
+      }];
+    }
+    delete loaded.emergencyQueueId;
+    if (!Array.isArray(loaded.alertRules)) loaded.alertRules = [];
     settings = { ...defaults, ...loaded };
   } catch { settings = { ...defaults }; }
   loadQueueTabs();
@@ -4590,26 +4646,42 @@ function renderWorkspacesMenu() {
 //    — modal banner + optional audio, auto-clears when call leaves the queue.
 // 2. Extension handshake via chrome.runtime.sendMessage ping to avoid double-fire.
 // 3. User-selectable mode in Settings: auto / dashboard / extension / both / off.
+function isEmbeddedClientApp() {
+  // Genesys Cloud Client App / desktop wrapper loads this page inside an
+  // iframe — window.parent !== window. The Chrome extension cannot reach
+  // a sibling iframe across origins, and the parent app already has its
+  // own notification surface, so we use the in-dashboard banner instead.
+  try { return window.parent !== window; } catch { return true; }
+}
 function shouldDashboardAlert() {
   const mode = settings.alertMode || "auto";
   if (mode === "off") return false;
   if (mode === "dashboard" || mode === "both") return true;
   if (mode === "extension") return false;
-  // "auto": fall back to dashboard iff extension absent/unreachable
+  // "auto":
+  //   • embedded as a Client App (iframe inside GC web/desktop) →
+  //     dashboard banner (extension unreachable, parent has its own)
+  //   • standalone browser tab → dashboard only if extension is absent
+  if (isEmbeddedClientApp()) return true;
   return !extensionPresent;
 }
 
+function alertRuleForQueue(queueId) {
+  if (!queueId) return null;
+  return (settings.alertRules || []).find(r => r.enabled && r.queueId === queueId) || null;
+}
+
 function maybeFireEmergencyAlert(row) {
-  if (!settings.emergencyQueueId) return;
-  if (row.queueId !== settings.emergencyQueueId) return;
+  const rule = alertRuleForQueue(row.queueId);
+  if (!rule) return;
   if (row.disconnected || row.hasMe || !["offering", "alerting", "connected"].includes(row.stateKey)) return;
   if (alertedConvIds.has(row.id)) return;
   alertedConvIds.add(row.id);
   if (!shouldDashboardAlert()) return;
-  showEmergencyAlert(row);
+  showEmergencyAlert(row, rule);
 }
 
-function showEmergencyAlert(row) {
+function showEmergencyAlert(row, rule) {
   activeAlertConvId = row.id;
   // Ask the extension (if installed) to suppress its own alert for this
   // conversation so we don't double-alert.
@@ -4618,37 +4690,67 @@ function showEmergencyAlert(row) {
   if (!host) {
     host = document.createElement("div");
     host.id = "emergencyAlertHost";
-    host.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:900;display:flex;align-items:center;justify-content:center;padding:10px 16px;background:#c00000;color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 10px rgba(0,0,0,.35);gap:16px;animation:emFlash 1s steps(2) infinite";
+    host.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:900;display:flex;align-items:center;justify-content:center;padding:10px 16px;color:#fff;font-weight:700;font-size:14px;box-shadow:0 3px 10px rgba(0,0,0,.35);gap:16px;animation:emFlash 1s steps(2) infinite";
     const style = document.createElement("style");
-    style.textContent = "@keyframes emFlash { 50% { background:#ff2020; } }";
+    // Brightness pulse works regardless of the rule's chosen color.
+    style.textContent = "@keyframes emFlash { 50% { filter: brightness(1.4); } }";
     document.head.appendChild(style);
     document.body.appendChild(host);
   }
+  const queueName = queuesById.get(row.queueId)?.name || row.queueId;
+  host.style.background = rule.color || "#c00000";
   host.innerHTML = `
-    <span>🚨 EMERGENCY QUEUE CALL</span>
+    <span>🚨 ${escape(queueName)}</span>
     <span style="font-weight:400">${escape(row.name || row.number || row.id)}</span>
     <button class="btn" id="emPickup" style="color:#000">Pick Up</button>
     <button class="btn" id="emDismiss" style="color:#000">Dismiss</button>`;
   host.style.display = "flex";
   el("emPickup").onclick = async () => { try { await doAction("pickup", conversations.get(row.id)); } catch {} dismissEmergencyAlert(); };
   el("emDismiss").onclick = dismissEmergencyAlert;
-  try { playAlertSound(); } catch {}
+  try { playAlertSound(rule.sound || "triple"); } catch {}
 }
 
+// Sound preset library — pure WebAudio synthesis (no file deps), same
+// approach as Alert-Extension-v2's offscreen.js. Each preset describes a
+// short envelope; playAlertSound looks up by id.
+const ALERT_SOUNDS = {
+  chime:  { name: "Chime",         beeps: [{ f: 880,  dur: 0.20 }] },
+  double: { name: "Double Beep",   beeps: [{ f: 880,  dur: 0.15 }, { f: 1100, dur: 0.15, delay: 0.25 }] },
+  triple: { name: "Triple Beep",   beeps: [{ f: 880,  dur: 0.22 }, { f: 880,  dur: 0.22, delay: 0.35 }, { f: 880, dur: 0.22, delay: 0.70 }] },
+  klaxon: { name: "Klaxon",        beeps: [{ f: 600,  dur: 0.25 }, { f: 900,  dur: 0.25, delay: 0.30 }, { f: 600, dur: 0.25, delay: 0.60 }, { f: 900, dur: 0.25, delay: 0.90 }] },
+  siren:  { name: "Siren Sweep",   sweep: { from: 400, to: 1000, dur: 1.5 } },
+  soft:   { name: "Soft Tone",     beeps: [{ f: 440,  dur: 0.40, gain: 0.10 }] }
+};
+
 let alertAudioCtx = null;
-function playAlertSound() {
+function playAlertSound(soundId) {
   if (!alertAudioCtx) alertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const ctx = alertAudioCtx;
   const start = ctx.currentTime;
-  // Three short beeps.
-  for (let i = 0; i < 3; i++) {
+  const preset = ALERT_SOUNDS[soundId] || ALERT_SOUNDS.triple;
+  if (preset.sweep) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.frequency.value = 880;
+    osc.type = "sine";
     gain.gain.value = 0.15;
     osc.connect(gain).connect(ctx.destination);
-    osc.start(start + i * 0.35);
-    osc.stop(start + i * 0.35 + 0.22);
+    osc.frequency.setValueAtTime(preset.sweep.from, start);
+    osc.frequency.linearRampToValueAtTime(preset.sweep.to,   start + preset.sweep.dur / 2);
+    osc.frequency.linearRampToValueAtTime(preset.sweep.from, start + preset.sweep.dur);
+    osc.start(start);
+    osc.stop(start + preset.sweep.dur);
+    return;
+  }
+  for (const b of preset.beeps) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = b.type || "sine";
+    osc.frequency.value = b.f;
+    gain.gain.value = b.gain || 0.15;
+    osc.connect(gain).connect(ctx.destination);
+    const s = start + (b.delay || 0);
+    osc.start(s);
+    osc.stop(s + b.dur);
   }
 }
 
