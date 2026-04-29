@@ -1466,11 +1466,7 @@ function handleNotification(msg) {
     const qid = topic.split(".")[3];
     if (qid && body) {
       // Normalize whatever shape the event delivers into a flat {metric: value} map.
-      const flat = flattenObservationEvent(body);
-      // Clear stale startMs when count goes to 0 (API omits the metric).
-      if (typeof flat.oWaiting     === "number" && flat.oWaiting     === 0) flat.oLongestWaiting_startMs     = null;
-      if (typeof flat.oInteracting === "number" && flat.oInteracting === 0) flat.oLongestInteracting_startMs = null;
-      const merged = { ...(queueStats.get(qid) || {}), ...flat };
+      const merged = { ...(queueStats.get(qid) || {}), ...flattenObservationEvent(body) };
       queueStats.set(qid, merged);
       if (qid === activeTabQueueId || activeTabQueueIds().includes(qid)) renderStats();
     }
@@ -1605,10 +1601,21 @@ function ingestConversation(c, hintQueueId) {
   else if (stateKey === "offering") stateDisplay = "In Queue";
   else if (stateKey === "held") stateDisplay = "On Hold";
 
-  const startTime = primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime ||
-                    agent?.connectedTime || c.dateModified || c.dateStart || Date.now();
-  const startTimeMs = new Date(startTime).getTime();
-  const queueEnterMs = acd?.startTime ? new Date(acd.startTime).getTime() : startTimeMs;
+  // Compute candidate timestamps from the current event payload. WS events
+  // can be partial — connectedTime/startAlertingTime are sometimes absent,
+  // and falling through to c.dateModified would use the EVENT TIME (now)
+  // as the call start, resetting Duration on every push. We pick the
+  // EARLIEST timestamp seen across this event AND any prior we cached on
+  // existing, so the per-row Duration and the derived Longest Wait stay
+  // anchored to the call's actual start.
+  const startCandidate = primaryCall.connectedTime || primaryCall.startAlertingTime || primaryCall.startTime ||
+                         agent?.connectedTime || c.dateStart || c.dateModified || Date.now();
+  let startTimeMs = new Date(startCandidate).getTime();
+  let queueEnterMs = acd?.startTime ? new Date(acd.startTime).getTime() : startTimeMs;
+  if (existing) {
+    if (typeof existing.startTimeMs  === "number" && existing.startTimeMs  < startTimeMs)  startTimeMs  = existing.startTimeMs;
+    if (typeof existing.queueEnterMs === "number" && existing.queueEnterMs < queueEnterMs) queueEnterMs = existing.queueEnterMs;
+  }
   const stateChangeMs = startTimeMs;
   const row = {
     id: c.id,
@@ -1762,15 +1769,7 @@ async function pollQueue(queueId) {
     const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
 
     // 1. Update stats panel (ALL metrics in the response)
-    const flat = flattenObservationEvent(data);
-    // GC's API omits oLongestWaiting / oLongestInteracting from the
-    // response when their count is 0 — so we have to use oWaiting /
-    // oInteracting count as the clear signal. Without this, a startMs
-    // captured during a prior call sits in the cache forever and the
-    // counter ticks indefinitely.
-    if (typeof flat.oWaiting     === "number" && flat.oWaiting     === 0) flat.oLongestWaiting_startMs     = null;
-    if (typeof flat.oInteracting === "number" && flat.oInteracting === 0) flat.oLongestInteracting_startMs = null;
-    queueStats.set(queueId, { ...(queueStats.get(queueId) || {}), ...flat });
+    queueStats.set(queueId, { ...(queueStats.get(queueId) || {}), ...flattenObservationEvent(data) });
     if (queueId === activeTabQueueId || activeTabQueueIds().includes(queueId)) renderStats();
 
     // 2. Harvest active call conversation IDs from the detail metrics
@@ -2232,37 +2231,22 @@ function renderToolbar() {
 //   oOffQueueUsers) come with qualifier fields. Preserve each qualifier
 //   separately using keys like `oOnQueueUsers_INTERACTING` so renderStats
 //   can sum them when it wants a total.
-// Time-based observation metrics: stats.calculatedMetricValue is the
-// epoch-ms START TIME of the longest-running observation (NOT a duration).
-// We store the raw start time as <metric>_startMs so the UI can tick
-// (Date.now() - startMs) every second without going stale — the start
-// time is server-authoritative. count=0 ⇒ no observation, so we clear
-// the stored start so the display drops back to "—".
+// We only consume count metrics here (oWaiting / oInteracting / etc).
+// Time-based metrics (oLongestWaiting / oLongestInteracting) are derived
+// directly from the conversations Map in renderStats, so they always
+// agree with the row Duration column by construction. Skip them here.
 const TIME_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
 function flattenObservationEvent(body) {
   const out = {};
   const addValue = (metric, qualifier, stats, obsArr) => {
     if (!metric) return;
+    if (TIME_METRICS.has(metric)) return;
     const key = qualifier ? `${metric}_${qualifier}` : metric;
-    if (TIME_METRICS.has(metric)) {
-      const startKey = key + "_startMs";
-      if (stats && stats.count > 0 && typeof stats.calculatedMetricValue === "number") {
-        // Earliest start time across mediaType groups in this body =
-        // longest wait.
-        const prior = out[startKey];
-        out[startKey] = (typeof prior === "number")
-          ? Math.min(prior, stats.calculatedMetricValue)
-          : stats.calculatedMetricValue;
-      } else if (stats && stats.count === 0 && !(startKey in out)) {
-        out[startKey] = null;  // server says nothing waiting — clear
-      }
-      return;
-    }
     let v = null;
     if (stats) v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
     if (v === null && Array.isArray(obsArr)) v = obsArr.length;
     if (typeof v !== "number") return;
-    out[key] = (out[key] || 0) + v;          // sum (e.g. count of waiting calls)
+    out[key] = (out[key] || 0) + v;
   };
   const results = body?.results;
   if (Array.isArray(results)) {
@@ -2343,38 +2327,34 @@ function renderStats() {
   // Interacting jumped from 0 → 1 with no visible transition.
   const tabQids = new Set(qids);
   const s = {};
+  // Counts AND longest-wait derive from the same conversations Map that
+  // feeds the queue tab list — so row Duration and Longest Wait can never
+  // disagree by construction. Wait time spans both offering and alerting
+  // because the customer is still on hold either way.
   let oWaiting = 0, oAlerting = 0, oInteracting = 0;
+  let oldestWaitMs = null, oldestInteractMs = null;
   for (const conv of conversations.values()) {
     if (conv.disconnected) continue;
     if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
-    if (conv.stateKey === "offering") oWaiting++;
-    else if (conv.stateKey === "alerting") oAlerting++;
-    else if (conv.stateKey === "connected" || conv.stateKey === "held") oInteracting++;
+    if (conv.stateKey === "offering") {
+      oWaiting++;
+      const t = conv.queueEnterMs || conv.startTimeMs;
+      if (typeof t === "number") oldestWaitMs = oldestWaitMs === null ? t : Math.min(oldestWaitMs, t);
+    } else if (conv.stateKey === "alerting") {
+      oAlerting++;
+      const t = conv.queueEnterMs || conv.startTimeMs;
+      if (typeof t === "number") oldestWaitMs = oldestWaitMs === null ? t : Math.min(oldestWaitMs, t);
+    } else if (conv.stateKey === "connected" || conv.stateKey === "held") {
+      oInteracting++;
+      const t = conv.startTimeMs;
+      if (typeof t === "number") oldestInteractMs = oldestInteractMs === null ? t : Math.min(oldestInteractMs, t);
+    }
   }
   s.oWaiting = oWaiting;
   s.oAlerting = oAlerting;
   s.oInteracting = oInteracting;
-
-  // Longest Wait / Longest Interacting: server-authoritative. The poll/WS
-  // pushes the epoch-ms start time of the longest-running observation per
-  // queue (or null when the queue has none). We pick the earliest across
-  // all queues in the tab (= longest current wait/interact) and the UI
-  // ticks (now - startMs) once a second.
-  let oldestWaitStart = null, oldestInteractStart = null;
-  for (const q of qids) {
-    const qs = queueStats.get(q) || {};
-    const w = qs.oLongestWaiting_startMs;
-    const i = qs.oLongestInteracting_startMs;
-    if (typeof w === "number") oldestWaitStart = oldestWaitStart === null ? w : Math.min(oldestWaitStart, w);
-    if (typeof i === "number") oldestInteractStart = oldestInteractStart === null ? i : Math.min(oldestInteractStart, i);
-  }
-  // Gate the displayed elapsed on the LOCAL count too — GC's API omits
-  // oLongestWaiting from the response entirely when count drops to 0, so
-  // the cached startMs lingers forever and would tick a phantom forever.
-  // Trust the live conversations Map: if there are 0 offering/connected
-  // calls locally, hide the metric regardless of server cache.
-  if (oldestWaitStart     !== null && oWaiting     > 0) s.oLongestWaiting     = (Date.now() - oldestWaitStart)     / 1000;
-  if (oldestInteractStart !== null && oInteracting > 0) s.oLongestInteracting = (Date.now() - oldestInteractStart) / 1000;
+  if (oldestWaitMs     !== null) s.oLongestWaiting     = (Date.now() - oldestWaitMs)     / 1000;
+  if (oldestInteractMs !== null) s.oLongestInteracting = (Date.now() - oldestInteractMs) / 1000;
 
   const memberIds = new Set();
   for (const q of qids) {
