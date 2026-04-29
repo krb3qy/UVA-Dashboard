@@ -201,11 +201,12 @@
     table.rows-table td.icon-col { padding: 2px 4px; text-align: center; }
     table.rows-table tr { cursor: default; }
     table.rows-table tr:hover td { background: var(--win-row-hover); }
-    table.rows-table tr.selected td { background: var(--win-accent); color: var(--win-accent-text); }
+    table.rows-table tr.selected td,
+    table.rows-table tr.multi-selected td { background: var(--win-accent); color: var(--win-accent-text); }
     table.rows-table tr.selected td .state-text,
-    table.rows-table tr.selected td .ico-color { color: var(--win-accent-text); fill: currentColor; }
-    table.rows-table tr.multi-selected td { box-shadow: inset 3px 0 0 var(--win-accent, #0078d4); background: rgba(0, 120, 212, 0.08); }
-    table.rows-table tr.multi-selected.selected td { background: var(--win-accent); }
+    table.rows-table tr.selected td .ico-color,
+    table.rows-table tr.multi-selected td .state-text,
+    table.rows-table tr.multi-selected td .ico-color { color: var(--win-accent-text); fill: currentColor; }
     table.rows-table tr.drop-target td { outline: 2px dashed #316ac5; outline-offset: -2px; }
 
     /* Row state text styling */
@@ -3842,8 +3843,24 @@ function wireRowSelection() {
       const scope = tr.dataset.scope;
       const isMulti = (e.ctrlKey || e.metaKey || e.shiftKey) && scope === "queue";
       if (isMulti) {
+        // Promote any pre-existing single-selection in queue scope into the
+        // multi-set so a plain-click → ctrl-click sequence keeps the first
+        // row selected too. Without this the action bar count drops by one.
+        if (selectedCallId && selectedCallScope === "queue" && !queueViewSelectedIds.has(selectedCallId)) {
+          queueViewSelectedIds.add(selectedCallId);
+        }
         if (queueViewSelectedIds.has(id)) queueViewSelectedIds.delete(id);
         else queueViewSelectedIds.add(id);
+        // Track most-recently-clicked row as the focused one for toolbar
+        // single-row context, but only if it's still in the set.
+        if (queueViewSelectedIds.has(id)) {
+          selectedCallId = id;
+          selectedCallScope = scope;
+        } else if (selectedCallId === id) {
+          // Last click un-selected the previously-focused row — pick another
+          // member of the set as the new focus, or clear.
+          selectedCallId = [...queueViewSelectedIds][0] || null;
+        }
       } else {
         // Plain click clears the multi-select set and falls back to single-select.
         queueViewSelectedIds.clear();
