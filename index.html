@@ -2335,9 +2335,14 @@ function renderStats() {
     if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
     if (conv.stateKey === "offering") {
       oWaiting++;
+      // From the customer's perspective they're still waiting until a live
+      // agent picks up — count both offering AND alerting calls toward the
+      // longest-wait timer. Pharm queues route to agents fast enough that
+      // 'offering' alone almost never has duration to display.
       longestWaitMs = Math.max(longestWaitMs, now - (conv.queueEnterMs || conv.startTimeMs || now));
     } else if (conv.stateKey === "alerting") {
       oAlerting++;
+      longestWaitMs = Math.max(longestWaitMs, now - (conv.queueEnterMs || conv.startTimeMs || now));
     } else if (conv.stateKey === "connected" || conv.stateKey === "held") {
       oInteracting++;
       longestInteractingMs = Math.max(longestInteractingMs, now - (conv.startTimeMs || now));
@@ -2346,8 +2351,8 @@ function renderStats() {
   s.oWaiting = oWaiting;
   s.oAlerting = oAlerting;
   s.oInteracting = oInteracting;
-  if (oWaiting > 0)      s.oLongestWaiting     = longestWaitMs / 1000;
-  if (oInteracting > 0)  s.oLongestInteracting = longestInteractingMs / 1000;
+  if (oWaiting + oAlerting > 0) s.oLongestWaiting     = longestWaitMs / 1000;
+  if (oInteracting > 0)         s.oLongestInteracting = longestInteractingMs / 1000;
 
   const memberIds = new Set();
   for (const q of qids) {
