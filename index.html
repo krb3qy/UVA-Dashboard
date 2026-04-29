@@ -2203,16 +2203,30 @@ function renderToolbar() {
 //   oOffQueueUsers) come with qualifier fields. Preserve each qualifier
 //   separately using keys like `oOnQueueUsers_INTERACTING` so renderStats
 //   can sum them when it wants a total.
+// Time-based observation metrics return stats.max as a duration in ms; we
+// want max-of-max across groups (not sum) and stored as seconds for display.
+const TIME_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
 function flattenObservationEvent(body) {
   const out = {};
   const addValue = (metric, qualifier, stats, obsArr) => {
     if (!metric) return;
     let v = null;
-    if (stats) v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
+    if (stats) {
+      if (TIME_METRICS.has(metric)) {
+        // Use the longest observation in this group, in seconds.
+        if (typeof stats.max === "number") v = stats.max / 1000;
+      } else {
+        v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
+      }
+    }
     if (v === null && Array.isArray(obsArr)) v = obsArr.length;
     if (typeof v !== "number") return;
     const key = qualifier ? `${metric}_${qualifier}` : metric;
-    out[key] = (out[key] || 0) + v;  // sum if same key appears in multiple groups
+    if (TIME_METRICS.has(metric)) {
+      out[key] = Math.max(out[key] || 0, v);  // max across mediaType groups
+    } else {
+      out[key] = (out[key] || 0) + v;          // sum (e.g. count of waiting calls)
+    }
   };
   const results = body?.results;
   if (Array.isArray(results)) {
@@ -2354,10 +2368,13 @@ function renderStats() {
       ["Off Queue",      offQueue]
     ]},
     { key: "waiting", title: "Interactions in queue", items: [
-      ["Waiting",          metricValue("oWaiting")],
-      ["Alerting",         metricValue("oAlerting")],
-      ["Interacting",      metricValue("oInteracting")],
-      ["Longest Wait (s)", metricValue("oLongestWaiting")]
+      ["Waiting",     metricValue("oWaiting")],
+      ["Alerting",    metricValue("oAlerting")],
+      ["Interacting", metricValue("oInteracting")],
+      ["Longest Wait", (() => {
+        const s = metricValue("oLongestWaiting");
+        return typeof s === "number" ? humanDuration(s * 1000) : "—";
+      })()]
     ]}
   ];
 
