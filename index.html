@@ -2903,13 +2903,12 @@ function startDurationTick() {
   durationTickTimer = setInterval(() => {
     renderMy();
     renderQueue();
-    // Stats panel tracks longest-wait / longest-interacting timers that
-    // need a 1Hz refresh to actually tick — otherwise renderStats only
-    // fires on WS events (call enters, call leaves), which leaves the
-    // displayed value frozen at whatever it was on the last transition.
-    renderStats();
-    // Update each call widget's duration in place — avoids full re-render
-    // which would tear down and re-create the DOM every second.
+    // Stats panel intentionally NOT re-rendered every second — a 1Hz tick
+    // means any stale conv lingering in the cache (e.g. a call whose
+    // transition WS event was missed) would cause Longest Wait to count
+    // up forever, even when the queue tab list shows no waiting calls.
+    // The stats panel updates on real WS events instead, so it can never
+    // disagree with the rows you see.
     for (const [cid, w] of callWidgets) {
       const row = conversations.get(cid);
       if (!row) continue;
