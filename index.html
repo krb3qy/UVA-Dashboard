@@ -32,6 +32,7 @@
          On Queue / Idle → light blue; Offline / Unknown → grey.           */
       --presence-available: #2e8b2e;
       --presence-busy: #c40000;
+      --presence-othercall: #d97706;
       --presence-away: #e07b00;
       --presence-onqueue: #3ba9e0;
       --presence-offline: #888888;
@@ -235,6 +236,7 @@
       border: 1px solid rgba(0,0,0,.25); }
     .dir-row .p-dot.available { background: var(--presence-available); }
     .dir-row .p-dot.busy { background: var(--presence-busy); }
+    .dir-row .p-dot.othercall { background: var(--presence-othercall); }
     .dir-row .p-dot.away { background: var(--presence-away); }
     .dir-row .p-dot.onqueue { background: var(--presence-onqueue); }
     .dir-row .p-dot.offline { background: var(--presence-offline); }
@@ -2305,13 +2307,12 @@ function renderDirectoryAgents() {
   let members = [...union].map(id => usersById.get(id) || { id, name: id });
   if (filter) members = members.filter(m => nameOf(m).includes(filter));
 
-  // "On Call" detection — two signals (verified against GC routing-status
-  // glossary, see reference_gc_observations_query memory + Genesys docs):
-  // 1) Tab-scoped: any cached conversation where state=connected and
-  //    assignedUserId matches the member, in one of this tab's queues.
-  //    Matches the stats panel's "On a Call" counter exactly.
-  // 2) Fallback: routingStatus === "INTERACTING" — agent is handling an
-  //    ACD interaction (live or ACW), even in a queue we're not watching.
+  // Three on-call buckets, all factually grounded (verified via gc.exe):
+  //   "queue"  — match in this tab's call list (same source as stats "On a Call")
+  //   "acd"    — routingStatus INTERACTING but no match: ACD call in another
+  //              queue, or ACW for a call that just ended
+  //   "direct" — routingStatus COMMUNICATING: non-ACD voice call (direct dial,
+  //              internal extension, transfer-in not via queue)
   const qidSet = new Set(qids);
   const onCallByConv = new Set();
   for (const r of conversations.values()) {
@@ -2319,14 +2320,20 @@ function renderDirectoryAgents() {
       onCallByConv.add(r.assignedUserId);
     }
   }
-  const isOnCall = (m) => onCallByConv.has(m.id) || m.routingStatus === "INTERACTING";
+  const callState = (m) => {
+    if (onCallByConv.has(m.id)) return "queue";
+    if (m.routingStatus === "INTERACTING") return "acd";
+    if (m.routingStatus === "COMMUNICATING") return "direct";
+    return null;
+  };
+  const callRank = (cs) => cs === "queue" ? 0 : (cs === "acd" || cs === "direct") ? 1 : 99;
 
   members.sort((a, b) => {
     if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
     if (dirSortMode === "presence") {
-      // On Call bubbles to the top of presence sort.
-      const aOn = isOnCall(a), bOn = isOnCall(b);
-      if (aOn !== bOn) return aOn ? -1 : 1;
+      const cra = callRank(callState(a)), crb = callRank(callState(b));
+      if (cra !== crb) return cra - crb;
+      if (cra < 99) return nameOf(a).localeCompare(nameOf(b));
       const ra = presenceRank[a.presence || "offline"] ?? 99;
       const rb = presenceRank[b.presence || "offline"] ?? 99;
       if (ra !== rb) return ra - rb;
@@ -2361,12 +2368,21 @@ function renderDirectoryAgents() {
     const p = m.presence || "offline";
     const raw = formatPresenceName(m.presenceRaw);
     const baseLabel = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
-    const onCall = isOnCall(m);
-    const dotClass = onCall ? "busy" : p;
-    const label = onCall ? "On Call" : baseLabel;
+    const cs = callState(m);
+    const dotClass = cs === "queue" ? "busy"
+                   : (cs === "acd" || cs === "direct") ? "othercall"
+                   : p;
+    const label = cs === "queue"  ? "On Call"
+                : cs === "acd"    ? "On ACD Call"
+                : cs === "direct" ? "On Direct Call"
+                : baseLabel;
+    const tipState = cs === "queue"  ? `On Call (${baseLabel})`
+                   : cs === "acd"    ? `On ACD call from another queue or in wrap-up (${baseLabel})`
+                   : cs === "direct" ? `On a non-ACD call — direct dial, internal extension, or transfer (${baseLabel})`
+                   : baseLabel;
     const sel = dirSelectedUsers.has(m.id) ? " selected" : "";
     const qlist = (userQueues.get(m.id) || []).join(", ");
-    const tip = `${m.name || m.id}\n${onCall ? `On Call (${baseLabel})` : baseLabel}${qlist ? `\nMember of: ${qlist}` : ""}`;
+    const tip = `${m.name || m.id}\n${tipState}${qlist ? `\nMember of: ${qlist}` : ""}`;
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}" title="${escape(tip)}">
       <span class="p-dot ${dotClass}" title="${escape(label)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
