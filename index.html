@@ -120,6 +120,28 @@
       border: 1px solid var(--win-border); min-height: 0; }
     .my-panel { margin: 4px 4px 0 4px; flex: 0 0 38%; min-height: 80px; }
     .queue-panel { flex: 1; margin: 0 4px 4px 4px; min-height: 120px; }
+
+    /* Queue split-view panes */
+    .queue-panes { flex: 1; display: flex; min-height: 0; min-width: 0; }
+    .queue-panes[data-split="single"] { flex-direction: row; }
+    .queue-panes[data-split="single"] > .queue-pane[data-pane="b"] { display: none; }
+    .queue-panes[data-split="v"] { flex-direction: row; }
+    .queue-panes[data-split="v"] > .queue-pane { flex: 1 1 0; min-width: 0; }
+    .queue-panes[data-split="v"] > .queue-pane[data-pane="b"] { border-left: 1px solid var(--win-border); }
+    .queue-panes[data-split="h"] { flex-direction: column; }
+    .queue-panes[data-split="h"] > .queue-pane { flex: 1 1 0; min-height: 0; }
+    .queue-panes[data-split="h"] > .queue-pane[data-pane="b"] { border-top: 1px solid var(--win-border); }
+    .queue-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+
+    .split-toggle { display: inline-flex; gap: 0; align-items: center; flex: 0 0 auto;
+      margin: 0 6px 4px 6px; }
+    .split-btn { background: #fafafa; border: 1px solid var(--win-border); cursor: pointer;
+      padding: 0 8px; height: 22px; font-size: 13px; line-height: 1; color: #555;
+      border-right-width: 0; }
+    .split-btn:last-child { border-right-width: 1px; }
+    .split-btn:hover { background: #e8eef7; }
+    .split-btn.active { background: var(--win-accent, #0078d4); color: #fff; border-color: var(--win-accent, #0078d4); }
+    .split-btn.active + .split-btn { border-left-color: var(--win-accent, #0078d4); }
     .panel-head { display: flex; align-items: center; padding: 3px 8px; gap: 8px;
       background: var(--win-panel-head); border-bottom: 1px solid var(--win-border);
       font-size: 12px; font-weight: 600; color: #1e3a5f; flex: 0 0 auto; }
@@ -480,21 +502,41 @@
       <div class="splitter-h" id="splitterH" title="Drag to resize"></div>
 
       <!-- Queue Panel with tabs -->
-      <div class="panel queue-panel">
-        <div class="tab-bar" id="tabBar">
-          <button class="add-tab" id="addTabBtn">+ Queue</button>
-        </div>
+      <div class="panel queue-panel" id="queuePanel">
         <div class="queue-action-bar" id="queueActionBar" style="display:none;padding:6px 8px;background:var(--win-soft,#f3f3f3);border-bottom:1px solid var(--win-border,#ddd);align-items:center;gap:8px">
           <span id="queueActionBarLabel" style="flex:1;font-size:12px;color:var(--win-muted)"></span>
           <button class="btn btn-sm" id="queueActionBarClear">Clear</button>
           <button class="btn btn-sm btn-primary" id="queueActionBarConference">Conference</button>
         </div>
-        <div class="rows-wrap">
-          <table class="rows-table" id="queueTable">
-            <thead><tr id="queueHead"></tr></thead>
-            <tbody id="queueBody"></tbody>
-          </table>
-          <div class="empty-msg" id="queueEmpty">No queue selected — click + Queue</div>
+        <div class="queue-panes" id="queuePanes" data-split="single">
+          <div class="queue-pane" data-pane="a">
+            <div class="tab-bar" id="tabBar">
+              <button class="add-tab" id="addTabBtn">+ Queue</button>
+              <span class="sp" style="flex:1"></span>
+              <div class="split-toggle" id="splitToggle" title="Split queue panel">
+                <button class="split-btn" data-split-mode="single" title="Single view">▭</button>
+                <button class="split-btn" data-split-mode="v" title="Side-by-side split">◫</button>
+                <button class="split-btn" data-split-mode="h" title="Stacked split">⬓</button>
+              </div>
+            </div>
+            <div class="rows-wrap">
+              <table class="rows-table" id="queueTable">
+                <thead><tr id="queueHead"></tr></thead>
+                <tbody id="queueBody"></tbody>
+              </table>
+              <div class="empty-msg" id="queueEmpty">No queue selected — click + Queue</div>
+            </div>
+          </div>
+          <div class="queue-pane" data-pane="b">
+            <div class="tab-bar" id="tabBarB"></div>
+            <div class="rows-wrap">
+              <table class="rows-table" id="queueTableB">
+                <thead><tr id="queueHeadB"></tr></thead>
+                <tbody id="queueBodyB"></tbody>
+              </table>
+              <div class="empty-msg" id="queueEmptyB">No queue selected</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1026,7 +1068,9 @@ let currentUser = null;            // {id, name, stationId, ...}
 // be renamed. Division-scoped tabs auto-populate their queueIds with every
 // queue in that division.
 let queueTabs = [];                // [{ id, name, queueIds:[], divisionId?:string }]
-let activeTabId = null;            // tab id, not a queueId
+let activeTabId = null;            // active tab in pane A (always rendered)
+let activeTabIdB = null;           // active tab in pane B (only used when splitMode != "single")
+let splitMode = "single";          // "single" | "v" (side-by-side) | "h" (stacked)
 // Legacy derived: selectedQueueIds = union of queueIds across all tabs.
 // activeTabQueueId = primary queue of the active tab (first in its queueIds).
 let selectedQueueIds = [];
@@ -1040,16 +1084,35 @@ function refreshDerivedQueueState() {
   const t = queueTabs.find(x => x.id === activeTabId);
   activeTabQueueId = (t && t.queueIds[0]) || null;
 }
+// Visible-tab IDs: in single mode just pane A; in split, both panes.
+// Stats / Agents / pollers all read activeTabQueueIds() so unioning here
+// auto-propagates the split-mode "combine across visible tabs" behavior.
+function visibleTabIds() {
+  return splitMode === "single" ? [activeTabId].filter(Boolean)
+    : [activeTabId, activeTabIdB].filter(Boolean);
+}
 function activeTabQueueIds() {
-  const t = queueTabs.find(x => x.id === activeTabId);
-  return t ? t.queueIds : [];
+  const seen = new Set();
+  const out = [];
+  for (const tid of visibleTabIds()) {
+    const t = queueTabs.find(x => x.id === tid);
+    if (!t) continue;
+    for (const q of t.queueIds) if (!seen.has(q)) { seen.add(q); out.push(q); }
+  }
+  return out;
 }
 function activeTab() { return queueTabs.find(t => t.id === activeTabId) || null; }
+function tabForPane(paneId) {
+  const tid = paneId === "b" ? activeTabIdB : activeTabId;
+  return queueTabs.find(t => t.id === tid) || null;
+}
 function newTabId() { return "t_" + Math.random().toString(36).slice(2, 10); }
 
 function saveQueueTabs() {
   try { localStorage.setItem("gc_uvad_queue_tabs_v2", JSON.stringify(queueTabs)); } catch {}
   try { localStorage.setItem("gc_uvad_queue_tabs_active", activeTabId || ""); } catch {}
+  try { localStorage.setItem("gc_uvad_queue_tabs_active_b", activeTabIdB || ""); } catch {}
+  try { localStorage.setItem("gc_uvad_split_mode", splitMode); } catch {}
 }
 function loadQueueTabs() {
   try {
@@ -1057,6 +1120,11 @@ function loadQueueTabs() {
     if (raw) { queueTabs = JSON.parse(raw) || []; }
   } catch { queueTabs = []; }
   try { activeTabId = localStorage.getItem("gc_uvad_queue_tabs_active") || null; } catch {}
+  try { activeTabIdB = localStorage.getItem("gc_uvad_queue_tabs_active_b") || null; } catch {}
+  try {
+    const sm = localStorage.getItem("gc_uvad_split_mode");
+    if (sm === "v" || sm === "h" || sm === "single") splitMode = sm;
+  } catch {}
   // Migrate old single-queue storage if present and new model is empty.
   if (queueTabs.length === 0) {
     try {
@@ -1067,6 +1135,12 @@ function loadQueueTabs() {
   }
   // Sanity: ensure activeTabId points at an existing tab.
   if (!queueTabs.find(t => t.id === activeTabId)) activeTabId = queueTabs[0]?.id || null;
+  if (activeTabIdB && !queueTabs.find(t => t.id === activeTabIdB)) activeTabIdB = null;
+  // Pane B fallback: if split is on but no tab assigned, pick a different tab
+  // than pane A; if only one tab exists, mirror pane A.
+  if (splitMode !== "single" && !activeTabIdB) {
+    activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs[0])?.id || null;
+  }
   refreshDerivedQueueState();
 }
 let selectedCallId = null;
@@ -1881,10 +1955,15 @@ function renderHeaders() {
     return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="my">${escape(c.label)}</th>`;
   }).join("");
   const activeCols = getQueueCols(activeTabQueueId);
-  el("queueHead").innerHTML = activeCols.map(k => {
+  const headHtml = activeCols.map(k => {
     const c = COLUMNS[k]; if (!c) return "";
     return `<th class="${c.icon ? 'icon-col' : ''}" style="width:${c.width}" data-col="${k}" data-scope="queue" draggable="true">${escape(c.label)}</th>`;
   }).join("");
+  el("queueHead").innerHTML = headHtml;
+  // Pane B mirrors pane A's columns. Drag handlers only wire on pane A so
+  // there's a single source-of-truth for the column order.
+  const headB = el("queueHeadB");
+  if (headB) headB.innerHTML = headHtml;
   wireQueueHeaderDrag();
 }
 
@@ -1964,29 +2043,37 @@ function renderMy() {
   el("myEmpty").style.display = rows.length === 0 ? "block" : "none";
 }
 
-function renderQueue() {
-  const empty = el("queueEmpty");
-  const tab = activeTab();
-  const qids = activeTabQueueIds();
+function renderQueueForPane(paneId) {
+  const bodyEl = paneId === "b" ? el("queueBodyB") : el("queueBody");
+  const emptyEl = paneId === "b" ? el("queueEmptyB") : el("queueEmpty");
+  if (!bodyEl || !emptyEl) return;
+  const tab = tabForPane(paneId);
+  const qids = tab ? tab.queueIds : [];
   if (!tab || qids.length === 0) {
-    el("queueBody").innerHTML = "";
-    empty.textContent = "No queue selected — click + Queue";
-    empty.style.display = "block"; return;
+    bodyEl.innerHTML = "";
+    emptyEl.textContent = paneId === "b" ? "No queue selected" : "No queue selected — click + Queue";
+    emptyEl.style.display = "block"; return;
   }
   const qidSet = new Set(qids);
   const rows = [...conversations.values()].filter(r => r.queueId && qidSet.has(r.queueId));
-  el("queueBody").innerHTML = rows.map(r => renderRow(r, "queue")).join("");
+  bodyEl.innerHTML = rows.map(r => renderRow(r, "queue")).join("");
   if (rows.length === 0) {
     const label = tab.name || (qids.length === 1 ? (queuesById.get(qids[0])?.name || qids[0]) : `${qids.length} queues`);
-    empty.textContent = `No calls in ${label}`;
-    empty.style.display = "block";
+    emptyEl.textContent = `No calls in ${label}`;
+    emptyEl.style.display = "block";
   } else {
-    empty.style.display = "none";
+    emptyEl.style.display = "none";
   }
 }
+function renderQueue() {
+  renderQueueForPane("a");
+  if (splitMode !== "single") renderQueueForPane("b");
+}
 
-function renderTabs() {
-  const bar = el("tabBar");
+function renderTabsForPane(paneId) {
+  const bar = paneId === "b" ? el("tabBarB") : el("tabBar");
+  if (!bar) return;
+  const myActiveId = paneId === "b" ? activeTabIdB : activeTabId;
   const tabs = queueTabs.map(t => {
     const label = t.name || (t.queueIds.length === 1
       ? (queuesById.get(t.queueIds[0])?.name || t.queueIds[0])
@@ -1994,17 +2081,59 @@ function renderTabs() {
     const qidSet = new Set(t.queueIds);
     const count = [...conversations.values()].filter(r => r.queueId && qidSet.has(r.queueId)).length;
     const isGroup = t.queueIds.length > 1;
-    const cls = `tab${activeTabId === t.id ? " active" : ""}${isGroup ? " group-tab" : ""}`;
+    const cls = `tab${myActiveId === t.id ? " active" : ""}${isGroup ? " group-tab" : ""}`;
     const qNames = t.queueIds.map(q => queuesById.get(q)?.name || q).join(", ");
     const tip = isGroup ? `${label}\nQueues: ${qNames}\n(right-click to edit)` : `${label}\n(right-click to edit)`;
-    return `<div class="${cls}" data-tab-id="${escape(t.id)}" data-qid="${escape(t.queueIds[0] || '')}" title="${escape(tip)}">
+    return `<div class="${cls}" data-tab-id="${escape(t.id)}" data-pane="${paneId}" data-qid="${escape(t.queueIds[0] || '')}" title="${escape(tip)}">
       <span>${escape(label)}</span>
       <span class="count">${count}</span>
       <span class="close" data-close-tab-id="${escape(t.id)}" title="Remove tab">✕</span>
     </div>`;
   }).join("");
-  bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn" title="Add or manage queue tabs">+ Queue</button>`;
-  el("addTabBtn").addEventListener("click", () => openCreateGroupModal());
+  // Pane A's tab bar carries the + Queue button and the split toggle; pane B
+  // is just a tab strip (no add/toggle controls).
+  if (paneId === "b") {
+    bar.innerHTML = tabs;
+  } else {
+    const splitToggleHtml = `<span class="sp" style="flex:1"></span>
+      <div class="split-toggle" id="splitToggle" title="Split queue panel">
+        <button class="split-btn ${splitMode === "single" ? "active" : ""}" data-split-mode="single" title="Single view">▭</button>
+        <button class="split-btn ${splitMode === "v" ? "active" : ""}" data-split-mode="v" title="Side-by-side split">◫</button>
+        <button class="split-btn ${splitMode === "h" ? "active" : ""}" data-split-mode="h" title="Stacked split">⬓</button>
+      </div>`;
+    bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn" title="Add or manage queue tabs">+ Queue</button>` + splitToggleHtml;
+    el("addTabBtn").addEventListener("click", () => openCreateGroupModal());
+    bar.querySelectorAll(".split-btn").forEach(b => b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      setSplitMode(b.dataset.splitMode);
+    }));
+  }
+}
+function renderTabs() {
+  // Sync the panes container's data-split so CSS picks the right layout.
+  const panes = el("queuePanes");
+  if (panes) panes.dataset.split = splitMode;
+  renderTabsForPane("a");
+  renderTabsForPane("b");
+}
+
+function setSplitMode(mode) {
+  if (mode !== "single" && mode !== "v" && mode !== "h") return;
+  splitMode = mode;
+  // When entering split, ensure pane B has a tab — pick a non-A tab if any,
+  // otherwise mirror A so pane B isn't blank.
+  if (splitMode !== "single" && !activeTabIdB) {
+    activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs.find(t => t.id === activeTabId))?.id || null;
+  }
+  saveQueueTabs();
+  refreshDerivedQueueState();
+  renderAll();
+  // Seed pane B's queue calls so it isn't empty until next poll.
+  if (splitMode !== "single") {
+    const b = queueTabs.find(t => t.id === activeTabIdB);
+    if (b) for (const qid of b.queueIds) pollQueue(qid).catch(() => {});
+  }
+  refreshSubscriptions().catch(() => {});
 }
 
 function renderToolbar() {
@@ -3658,17 +3787,20 @@ function wireRowSelection() {
     // only match queue tabs (which carry [data-tab-id]).
     const tab = e.target.closest(".tab[data-tab-id]");
     if (tab) {
+      const tabPane = tab.dataset.pane === "b" ? "b" : "a";
       const closeBtn = e.target.closest(".close");
       if (closeBtn) {
         const tabId = closeBtn.dataset.closeTabId;
         queueTabs = queueTabs.filter(x => x.id !== tabId);
         if (activeTabId === tabId) activeTabId = queueTabs[0]?.id || null;
+        if (activeTabIdB === tabId) activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs[0])?.id || null;
         refreshDerivedQueueState();
         saveQueueTabs(); renderAll();
         fetchActiveTabMembers();
         refreshSubscriptions().catch(() => {});
       } else {
-        activeTabId = tab.dataset.tabId;
+        if (tabPane === "b") activeTabIdB = tab.dataset.tabId;
+        else activeTabId = tab.dataset.tabId;
         refreshDerivedQueueState();
         saveQueueTabs();
         // Seed every queue in the tab + refresh members for its primary queue.
@@ -4233,6 +4365,8 @@ function captureCurrentWorkspace() {
   return {
     queueTabs: JSON.parse(JSON.stringify(queueTabs)),   // deep clone
     activeTabId,
+    activeTabIdB,
+    splitMode,
     myCols: [...myCols],
     queueCols: [...queueCols],
     sidebarCollapsed: el("rightCol").classList.contains("collapsed"),
@@ -4251,6 +4385,13 @@ async function applyWorkspace(ws) {
     // Legacy workspace format
     queueTabs = ws.queues.map(qid => ({ id: newTabId(), name: "", queueIds: [qid], divisionId: null }));
     activeTabId = queueTabs[0]?.id || null;
+  }
+  // Split state (workspaces saved before this feature land in single mode).
+  splitMode = (ws.splitMode === "v" || ws.splitMode === "h") ? ws.splitMode : "single";
+  activeTabIdB = ws.activeTabIdB || null;
+  if (activeTabIdB && !queueTabs.find(t => t.id === activeTabIdB)) activeTabIdB = null;
+  if (splitMode !== "single" && !activeTabIdB) {
+    activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs[0])?.id || null;
   }
   refreshDerivedQueueState();
   if (ws.myCols) myCols = [...ws.myCols];
