@@ -1071,6 +1071,24 @@ let queueTabs = [];                // [{ id, name, queueIds:[], divisionId?:stri
 let activeTabId = null;            // active tab in pane A (always rendered)
 let activeTabIdB = null;           // active tab in pane B (only used when splitMode != "single")
 let splitMode = "single";          // "single" | "v" (side-by-side) | "h" (stacked)
+// Per-pane visible-tab sets. Pane A and pane B can hide tabs independently
+// (X on a tab in pane A only removes it from pane A's strip; pane B keeps
+// showing it). A tab disappears entirely (deleted from queueTabs) only when
+// no pane is showing it any more. Empty set ⇒ "show all" — used as the
+// default for fresh users / pre-feature workspaces.
+let visibleTabsByPane = { a: new Set(), b: new Set() };
+function visibleTabIdsForPane(paneId) {
+  const set = visibleTabsByPane[paneId];
+  // Empty (default) ⇒ pane shows every tab. Once the user hides one, the
+  // set becomes explicit and is the source of truth from then on.
+  if (!set || set.size === 0) return queueTabs.map(t => t.id);
+  return queueTabs.filter(t => set.has(t.id)).map(t => t.id);
+}
+function ensureTabVisibleInPane(paneId, tabId) {
+  const set = visibleTabsByPane[paneId];
+  // Only meaningful once the set is "explicit". Empty stays empty (= all).
+  if (set && set.size > 0) set.add(tabId);
+}
 // Legacy derived: selectedQueueIds = union of queueIds across all tabs.
 // activeTabQueueId = primary queue of the active tab (first in its queueIds).
 let selectedQueueIds = [];
@@ -1113,6 +1131,8 @@ function saveQueueTabs() {
   try { localStorage.setItem("gc_uvad_queue_tabs_active", activeTabId || ""); } catch {}
   try { localStorage.setItem("gc_uvad_queue_tabs_active_b", activeTabIdB || ""); } catch {}
   try { localStorage.setItem("gc_uvad_split_mode", splitMode); } catch {}
+  try { localStorage.setItem("gc_uvad_visible_tabs_a", JSON.stringify([...visibleTabsByPane.a])); } catch {}
+  try { localStorage.setItem("gc_uvad_visible_tabs_b", JSON.stringify([...visibleTabsByPane.b])); } catch {}
 }
 function loadQueueTabs() {
   try {
@@ -1125,6 +1145,12 @@ function loadQueueTabs() {
     const sm = localStorage.getItem("gc_uvad_split_mode");
     if (sm === "v" || sm === "h" || sm === "single") splitMode = sm;
   } catch {}
+  try {
+    const va = JSON.parse(localStorage.getItem("gc_uvad_visible_tabs_a") || "[]");
+    const vb = JSON.parse(localStorage.getItem("gc_uvad_visible_tabs_b") || "[]");
+    visibleTabsByPane.a = new Set(Array.isArray(va) ? va : []);
+    visibleTabsByPane.b = new Set(Array.isArray(vb) ? vb : []);
+  } catch { visibleTabsByPane.a = new Set(); visibleTabsByPane.b = new Set(); }
   // Migrate old single-queue storage if present and new model is empty.
   if (queueTabs.length === 0) {
     try {
@@ -2074,7 +2100,8 @@ function renderTabsForPane(paneId) {
   const bar = paneId === "b" ? el("tabBarB") : el("tabBar");
   if (!bar) return;
   const myActiveId = paneId === "b" ? activeTabIdB : activeTabId;
-  const tabs = queueTabs.map(t => {
+  const visibleIds = new Set(visibleTabIdsForPane(paneId));
+  const tabs = queueTabs.filter(t => visibleIds.has(t.id)).map(t => {
     const label = t.name || (t.queueIds.length === 1
       ? (queuesById.get(t.queueIds[0])?.name || t.queueIds[0])
       : `Group (${t.queueIds.length})`);
@@ -2087,13 +2114,14 @@ function renderTabsForPane(paneId) {
     return `<div class="${cls}" data-tab-id="${escape(t.id)}" data-pane="${paneId}" data-qid="${escape(t.queueIds[0] || '')}" title="${escape(tip)}">
       <span>${escape(label)}</span>
       <span class="count">${count}</span>
-      <span class="close" data-close-tab-id="${escape(t.id)}" title="Remove tab">✕</span>
+      <span class="close" data-close-tab-id="${escape(t.id)}" title="Hide tab from this pane (right-click for more)">✕</span>
     </div>`;
   }).join("");
-  // Pane A's tab bar carries the + Queue button and the split toggle; pane B
-  // is just a tab strip (no add/toggle controls).
+  // Both panes get a + Queue button; pane A also carries the split toggle.
+  const addBtnId = paneId === "b" ? "addTabBtnB" : "addTabBtn";
+  const addBtnHtml = `<button class="add-tab" id="${addBtnId}" data-pane="${paneId}" title="Add or manage queue tabs">+ Queue</button>`;
   if (paneId === "b") {
-    bar.innerHTML = tabs;
+    bar.innerHTML = tabs + addBtnHtml;
   } else {
     const splitToggleHtml = `<span class="sp" style="flex:1"></span>
       <div class="split-toggle" id="splitToggle" title="Split queue panel">
@@ -2101,13 +2129,14 @@ function renderTabsForPane(paneId) {
         <button class="split-btn ${splitMode === "v" ? "active" : ""}" data-split-mode="v" title="Side-by-side split">◫</button>
         <button class="split-btn ${splitMode === "h" ? "active" : ""}" data-split-mode="h" title="Stacked split">⬓</button>
       </div>`;
-    bar.innerHTML = tabs + `<button class="add-tab" id="addTabBtn" title="Add or manage queue tabs">+ Queue</button>` + splitToggleHtml;
-    el("addTabBtn").addEventListener("click", () => openCreateGroupModal());
+    bar.innerHTML = tabs + addBtnHtml + splitToggleHtml;
     bar.querySelectorAll(".split-btn").forEach(b => b.addEventListener("click", (ev) => {
       ev.stopPropagation();
       setSplitMode(b.dataset.splitMode);
     }));
   }
+  const addBtn = el(addBtnId);
+  if (addBtn) addBtn.addEventListener("click", () => openCreateGroupModal({ targetPane: paneId }));
 }
 function renderTabs() {
   // Sync the panes container's data-split so CSS picks the right layout.
@@ -2122,8 +2151,11 @@ function setSplitMode(mode) {
   splitMode = mode;
   // When entering split, ensure pane B has a tab — pick a non-A tab if any,
   // otherwise mirror A so pane B isn't blank.
-  if (splitMode !== "single" && !activeTabIdB) {
-    activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs.find(t => t.id === activeTabId))?.id || null;
+  if (splitMode !== "single") {
+    const visB = visibleTabIdsForPane("b");
+    if (!activeTabIdB || !visB.includes(activeTabIdB)) {
+      activeTabIdB = visB.find(id => id !== activeTabId) || visB[0] || activeTabId;
+    }
   }
   saveQueueTabs();
   refreshDerivedQueueState();
@@ -3513,19 +3545,32 @@ function openCreateGroupModal(opts = {}) {
     if (qids.length === 0) return;
 
     const divisionId = divSel.value || null;
+    const targetPane = opts.targetPane === "b" ? "b" : "a";
     if (editing) {
-      // Edit mode: update the existing tab in place.
+      // Edit mode: update the existing tab in place. Targeted pane gets the
+      // updated tab as its active selection.
       editing.name = name || editing.name;
       editing.queueIds = qids;
       editing.divisionId = divisionId;
-      activeTabId = editing.id;
+      if (targetPane === "b") activeTabIdB = editing.id; else activeTabId = editing.id;
+      ensureTabVisibleInPane(targetPane, editing.id);
     } else {
       if (el("cgDeleteDupes").checked) {
-        queueTabs = queueTabs.filter(t => !(t.queueIds.length === 1 && qids.includes(t.queueIds[0])));
+        const removedIds = queueTabs
+          .filter(t => t.queueIds.length === 1 && qids.includes(t.queueIds[0]))
+          .map(t => t.id);
+        queueTabs = queueTabs.filter(t => !removedIds.includes(t.id));
+        for (const rid of removedIds) {
+          visibleTabsByPane.a.delete(rid);
+          visibleTabsByPane.b.delete(rid);
+        }
       }
       const tab = { id: newTabId(), name: name || (queuesById.get(qids[0])?.name || ""), queueIds: qids, divisionId };
       queueTabs.push(tab);
-      activeTabId = tab.id;
+      if (targetPane === "b") activeTabIdB = tab.id; else activeTabId = tab.id;
+      // New tab is visible in the pane that asked for it. Other pane keeps
+      // its current visible set untouched (independence preserved).
+      ensureTabVisibleInPane(targetPane, tab.id);
     }
     refreshDerivedQueueState();
     saveQueueTabs();
@@ -3791,9 +3836,43 @@ function wireRowSelection() {
       const closeBtn = e.target.closest(".close");
       if (closeBtn) {
         const tabId = closeBtn.dataset.closeTabId;
-        queueTabs = queueTabs.filter(x => x.id !== tabId);
-        if (activeTabId === tabId) activeTabId = queueTabs[0]?.id || null;
-        if (activeTabIdB === tabId) activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs[0])?.id || null;
+        if (splitMode === "single") {
+          // Single mode: X deletes the tab globally (legacy behavior).
+          queueTabs = queueTabs.filter(x => x.id !== tabId);
+          visibleTabsByPane.a.delete(tabId);
+          visibleTabsByPane.b.delete(tabId);
+          if (activeTabId === tabId) activeTabId = queueTabs[0]?.id || null;
+        } else {
+          // Split mode: X hides the tab from THIS pane only. If the set is
+          // empty (default-show-all), seed it with every other tab so the
+          // hide actually takes effect.
+          const set = visibleTabsByPane[tabPane];
+          if (set.size === 0) for (const t of queueTabs) if (t.id !== tabId) set.add(t.id);
+          else set.delete(tabId);
+          // If the tab is now hidden in BOTH panes (both explicit + missing),
+          // delete it from queueTabs altogether — nothing references it.
+          const hiddenInA = visibleTabsByPane.a.size > 0 && !visibleTabsByPane.a.has(tabId);
+          const hiddenInB = visibleTabsByPane.b.size > 0 && !visibleTabsByPane.b.has(tabId);
+          if (hiddenInA && hiddenInB) {
+            queueTabs = queueTabs.filter(x => x.id !== tabId);
+            visibleTabsByPane.a.delete(tabId);
+            visibleTabsByPane.b.delete(tabId);
+          }
+          // If the closed tab was the active one for this pane, fall back
+          // to the first remaining visible tab in that pane.
+          if (tabPane === "a" && activeTabId === tabId) {
+            const visA = visibleTabIdsForPane("a");
+            activeTabId = visA[0] || null;
+          }
+          if (tabPane === "b" && activeTabIdB === tabId) {
+            const visB = visibleTabIdsForPane("b");
+            activeTabIdB = visB[0] || null;
+          }
+        }
+        // Generic safety: ensure activeTabId / activeTabIdB still point at
+        // existing tabs after any changes above.
+        if (activeTabIdB && !queueTabs.find(t => t.id === activeTabIdB)) activeTabIdB = null;
+        if (activeTabId && !queueTabs.find(t => t.id === activeTabId)) activeTabId = queueTabs[0]?.id || null;
         refreshDerivedQueueState();
         saveQueueTabs(); renderAll();
         fetchActiveTabMembers();
@@ -4367,6 +4446,8 @@ function captureCurrentWorkspace() {
     activeTabId,
     activeTabIdB,
     splitMode,
+    visibleTabsA: [...visibleTabsByPane.a],
+    visibleTabsB: [...visibleTabsByPane.b],
     myCols: [...myCols],
     queueCols: [...queueCols],
     sidebarCollapsed: el("rightCol").classList.contains("collapsed"),
@@ -4390,8 +4471,13 @@ async function applyWorkspace(ws) {
   splitMode = (ws.splitMode === "v" || ws.splitMode === "h") ? ws.splitMode : "single";
   activeTabIdB = ws.activeTabIdB || null;
   if (activeTabIdB && !queueTabs.find(t => t.id === activeTabIdB)) activeTabIdB = null;
+  // Per-pane visible sets — pre-feature workspaces leave these unset, which
+  // means "show all tabs in both panes" (the default behavior).
+  visibleTabsByPane.a = new Set(Array.isArray(ws.visibleTabsA) ? ws.visibleTabsA : []);
+  visibleTabsByPane.b = new Set(Array.isArray(ws.visibleTabsB) ? ws.visibleTabsB : []);
   if (splitMode !== "single" && !activeTabIdB) {
-    activeTabIdB = (queueTabs.find(t => t.id !== activeTabId) || queueTabs[0])?.id || null;
+    const visB = visibleTabIdsForPane("b");
+    activeTabIdB = visB.find(id => id !== activeTabId) || visB[0] || activeTabId;
   }
   refreshDerivedQueueState();
   if (ws.myCols) myCols = [...ws.myCols];
