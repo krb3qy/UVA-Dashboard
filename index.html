@@ -2302,27 +2302,36 @@ function renderStats() {
     return;
   }
 
-  // Interactions-in-queue metrics come from the observation response.
-  // Summing oWaiting / oAlerting / oInteracting across queues is correct
-  // because those are per-call counts (a call only sits in one queue).
-  // Longest-wait is maxed across queues.
-  const MAX_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
+  // Interactions-in-queue metrics are now derived directly from the
+  // dashboard's conversations Map — same source the queue tab list reads
+  // — so they update instantly on WebSocket events. The 20s observation
+  // poll lagged real state: a call could enter, alert, and be answered
+  // all between two polls, so Waiting/Alerting were under-counted while
+  // Interacting jumped from 0 → 1 with no visible transition.
+  const tabQids = new Set(qids);
   const s = {};
-  for (const q of qids) {
-    const src = queueStats.get(q) || {};
-    for (const [k, v] of Object.entries(src)) {
-      if (typeof v !== "number") continue;
-      if (MAX_METRICS.has(k)) s[k] = Math.max(s[k] || 0, v);
-      else s[k] = (s[k] || 0) + v;
+  let oWaiting = 0, oAlerting = 0, oInteracting = 0;
+  let longestWaitMs = 0, longestInteractingMs = 0;
+  const now = Date.now();
+  for (const conv of conversations.values()) {
+    if (conv.disconnected) continue;
+    if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
+    if (conv.stateKey === "offering") {
+      oWaiting++;
+      longestWaitMs = Math.max(longestWaitMs, now - (conv.queueEnterMs || conv.startTimeMs || now));
+    } else if (conv.stateKey === "alerting") {
+      oAlerting++;
+    } else if (conv.stateKey === "connected" || conv.stateKey === "held") {
+      oInteracting++;
+      longestInteractingMs = Math.max(longestInteractingMs, now - (conv.startTimeMs || now));
     }
   }
+  s.oWaiting = oWaiting;
+  s.oAlerting = oAlerting;
+  s.oInteracting = oInteracting;
+  if (oWaiting > 0)      s.oLongestWaiting     = longestWaitMs / 1000;
+  if (oInteracting > 0)  s.oLongestInteracting = longestInteractingMs / 1000;
 
-  // Agent-level counts — derived from deduped queueMembers + the
-  // conversations Map. Routing status is GLOBAL per user, so "On a Call"
-  // off the routing status would include agents on calls from queues
-  // NOT in this tab. Scope it to calls actually in this tab's queues
-  // instead. Net effect: 0 calls in the queue panel → 0 On a Call.
-  const tabQids = new Set(qids);
   const memberIds = new Set();
   for (const q of qids) {
     const set = queueMembers.get(q);
