@@ -1764,9 +1764,14 @@ async function resolveUser(id) {
 async function fetchCurrentUser() {
   const me = await apiFetch("/api/v2/users/me?expand=presence,routingStatus,station");
   const station = me.station?.associatedStation || me.station?.effectiveStation || me.station?.defaultStation;
+  // GC's station object has the human-readable identifier under
+  // providerInfo.name (e.g. the WebRTC SIP URI); a top-level .name field
+  // exists only for some physical-station shapes. Fall back through both
+  // so WebRTC users don't show 'Station: —'.
+  const stationName = station?.providerInfo?.name || station?.name || (station?.id ? station.id.slice(0, 8) : "");
   currentUser = {
     id: me.id, name: me.name,
-    station: station?.name || "",
+    station: stationName,
     stationType: station?.type || ""    // inin_webrtc_softphone, inin_physical, inin_remote, etc.
   };
   const rawP = me.presence?.presenceDefinition?.systemPresence || "";
@@ -4416,6 +4421,9 @@ function assignEligibilityError(convId) {
   const rs = (me.routingStatus || "").toUpperCase();
   if (rs === "OFF_QUEUE" || rs === "") {
     return "You're Off Queue. Switch to On Queue in the Genesys client to take queue calls.";
+  }
+  if (rs === "NOT_RESPONDING") {
+    return "You're Not Responding (a previous routed call wasn't answered). Toggle yourself On Queue in the Genesys client to reset to Idle, then retry.";
   }
   const conv = conversations.get(convId);
   if (conv?.queueId) {
