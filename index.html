@@ -1946,7 +1946,7 @@ async function ensureMaxConf() {
 //  Rendering — tables
 // ================================================================
 function humanDuration(ms) {
-  if (!ms || ms < 0) return "";
+  if (typeof ms !== "number" || ms < 0) return "";
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -2903,6 +2903,11 @@ function startDurationTick() {
   durationTickTimer = setInterval(() => {
     renderMy();
     renderQueue();
+    // Stats panel tracks longest-wait / longest-interacting timers that
+    // need a 1Hz refresh to actually tick — otherwise renderStats only
+    // fires on WS events (call enters, call leaves), which leaves the
+    // displayed value frozen at whatever it was on the last transition.
+    renderStats();
     // Update each call widget's duration in place — avoids full re-render
     // which would tear down and re-create the DOM every second.
     for (const [cid, w] of callWidgets) {
