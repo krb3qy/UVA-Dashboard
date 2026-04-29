@@ -395,6 +395,8 @@
   <div class="menu-bar" id="menuBar">
     <div class="item" data-menu="file">File
       <div class="menu-dropdown">
+        <div class="mi" data-cmd="settings">Settings…</div>
+        <div class="sep"></div>
         <div class="mi" data-cmd="logout">Log Off</div>
       </div>
     </div>
@@ -403,8 +405,6 @@
         <div class="mi disabled">Cut<span class="shortcut">Ctrl+X</span></div>
         <div class="mi disabled">Copy<span class="shortcut">Ctrl+C</span></div>
         <div class="mi disabled">Paste<span class="shortcut">Ctrl+V</span></div>
-        <div class="sep"></div>
-        <div class="mi" data-cmd="settings">Preferences…</div>
       </div>
     </div>
     <div class="item" data-menu="view">View
@@ -412,6 +412,7 @@
         <div class="mi" data-cmd="toggleSidebar"><span class="check" id="checkSidebar">✓</span>Workgroup Statistics</div>
         <div class="mi" data-cmd="toggleDirectory"><span class="check" id="checkDir">✓</span>Directory</div>
         <div class="sep"></div>
+        <div class="mi" data-cmd="manageQueueTabs">Manage Queue Tabs…</div>
         <div class="mi" data-cmd="customizeCols">Customize Columns…</div>
         <div class="mi" data-cmd="reload">Refresh</div>
       </div>
@@ -423,7 +424,6 @@
       <div class="menu-dropdown">
         <div class="mi" data-cmd="confDialer">Conference Dialer…</div>
         <div class="mi" data-cmd="sendSms">Send Text Message…</div>
-        <div class="sep"></div>
         <div class="mi" data-cmd="makeCall">Make Call…</div>
       </div>
     </div>
@@ -453,8 +453,7 @@
     <span class="chunk" id="sbStation">Station: —</span>
     <span class="chunk" id="sbNote" style="cursor:pointer" title="Click to set status note">Note: —</span>
     <span class="chunk sp"></span>
-    <span class="chunk" id="sbAlertMode" style="cursor:pointer" title="Click to cycle alert mode">Alerts: auto</span>
-    <span class="chunk" id="sbConnected">Connecting…</span>
+    <span class="chunk" id="sbAlertMode" title="Configure in File &gt; Settings">Alerts: auto</span>
     <span class="chunk" id="sbClock">—</span>
   </div>
 
@@ -662,9 +661,40 @@
   <div class="modal">
     <div class="titlebar"><span>Settings</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
+      <label>Alert delivery</label>
+      <select id="alertModeSel">
+        <option value="auto">Auto (dashboard when extension absent)</option>
+        <option value="dashboard">Dashboard only</option>
+        <option value="extension">Extension only</option>
+        <option value="both">Both (may double-alert)</option>
+        <option value="off">Off</option>
+      </select>
+
+      <label style="margin-top:12px">Emergency queue (fires alert when a call arrives)</label>
+      <select id="emergencyQueueSel"><option value="">(none)</option></select>
+
+      <label style="margin-top:12px">Alert-Extension-v2 ID <span id="extensionStatus" style="font-weight:normal;color:var(--win-muted);margin-left:6px"></span></label>
+      <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
+        Chrome extension ID for the WebRTC answer bridge. Required to actually pick up
+        calls from the dashboard, and to surface emergency alerts as Chrome notifications.
+        Get it from <code>chrome://extensions</code> after loading the extension.
+      </div>
+      <input type="text" id="extensionIdInput" placeholder="32-character extension ID" />
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="settingsClose">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- MANAGE QUEUE TABS MODAL -->
+<div id="manageQueueTabsModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="titlebar"><span>Manage Queue Tabs</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+    <div class="body">
       <label>Monitored queues — check to watch; each queue starts in its own tab</label>
       <input type="text" id="queueSearch" placeholder="Type to filter queues…" />
-      <div id="queueList" style="max-height:22vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
+      <div id="queueList" style="max-height:30vh; overflow:auto; border:1px solid var(--win-border); background:#fff; margin-top:4px;"></div>
 
       <label style="margin-top:14px">Tabs — each tab can hold one queue or many</label>
       <div style="font-size:11px;color:var(--win-muted);margin-bottom:4px">
@@ -675,26 +705,10 @@
         <button class="btn btn-sm" id="combineCheckedBtn" disabled>Combine checked queues into one tab</button>
         <button class="btn btn-sm" id="createGroupBtn">+ Create custom tab…</button>
       </div>
-      <div id="tabGroupsList" style="max-height:22vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-      <label style="margin-top:12px">Emergency queue (fires in-dashboard alert when calls arrive)</label>
-      <select id="emergencyQueueSel"><option value="">(none)</option></select>
-      <label style="margin-top:12px">Alert delivery</label>
-      <select id="alertModeSel">
-        <option value="auto">Auto (dashboard when extension absent)</option>
-        <option value="dashboard">Dashboard only</option>
-        <option value="extension">Extension only</option>
-        <option value="both">Both (may double-alert)</option>
-        <option value="off">Off</option>
-      </select>
-      <label style="margin-top:12px">Supervisor actions</label>
-      <label style="font-size:11px;font-weight:normal"><input type="checkbox" id="supervisorOverride" /> I am a supervisor (force-show Listen / Coach / Join)</label>
-      <label style="margin-top:12px">Alert-Extension-v2 ID (WebRTC pickup bridge + emergency alert)</label>
-      <input type="text" id="extensionIdInput" placeholder="chrome://extensions → copy the ID" />
-      <label style="margin-top:12px">Environment</label>
-      <input type="text" id="envInput" value="usw2.pure.cloud" />
+      <div id="tabGroupsList" style="max-height:30vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
     </div>
     <div class="actions">
-      <button class="btn btn-primary" id="settingsClose">OK</button>
+      <button class="btn btn-primary" id="manageQueueTabsClose">OK</button>
     </div>
   </div>
 </div>
@@ -1158,8 +1172,7 @@ let selectedDirUserId = null;
 let settings = {
   extensionId: "",
   emergencyQueueId: "",
-  alertMode: "auto",        // auto | dashboard | extension | both | off
-  supervisorOverride: false
+  alertMode: "auto"         // auto | dashboard | extension | both | off
 };
 let activeMyTab = "interactions";     // "interactions" | "history"
 let callHistory = [];                 // rows for Call History tab
@@ -1273,7 +1286,6 @@ function setStatus(text, kind = "") {
   if (kind === "ok") dot.classList.add("connected");
   else if (kind === "warn") dot.classList.add("warn");
   else if (kind === "err") dot.classList.add("err");
-  el("sbConnected").textContent = text;
 }
 
 function showBanner({ type = "info", title = "", message = "", autoHideMs = 0 } = {}) {
@@ -3303,13 +3315,49 @@ async function openWrapupModal(row) {
   };
 }
 
-// Settings
+// Settings — alert delivery, emergency queue, alert-extension ID. Anything
+// to do with queue/tab management lives in openManageQueueTabs().
 async function openSettings() {
   openModal("settingsModal");
   el("extensionIdInput").value = settings.extensionId || "";
-  el("envInput").value = CONFIG.environment;
   el("alertModeSel").value = settings.alertMode || "auto";
-  el("supervisorOverride").checked = !!settings.supervisorOverride;
+  // Emergency-queue dropdown — populate from full queue list (lazy fetch).
+  try {
+    if (queuesById.size < 3) await fetchAllQueues();
+    const emg = el("emergencyQueueSel");
+    emg.innerHTML = '<option value="">(none)</option>' +
+      [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+        .map(q => `<option value="${escape(q.id)}" ${q.id === settings.emergencyQueueId ? "selected" : ""}>${escape(q.name)}</option>`).join("");
+    emg.onchange = () => { settings.emergencyQueueId = emg.value; saveSettings(); };
+  } catch {}
+  el("alertModeSel").onchange = () => { settings.alertMode = el("alertModeSel").value; saveSettings(); renderMyPresence(); };
+  el("extensionIdInput").oninput = () => {
+    settings.extensionId = el("extensionIdInput").value.trim();
+    saveSettings();
+    refreshExtensionStatus();
+  };
+  refreshExtensionStatus();
+  el("settingsClose").onclick = () => closeModal("settingsModal");
+}
+
+function refreshExtensionStatus() {
+  const indicator = el("extensionStatus");
+  if (!indicator) return;
+  if (!settings.extensionId) { indicator.textContent = ""; return; }
+  // Optimistic: rely on the cached extensionPresent flag; pingExtension()
+  // refreshes it on a poll. Show the last-known state immediately so the
+  // user sees feedback without waiting for a round-trip.
+  if (extensionPresent) {
+    indicator.textContent = "✓ connected";
+    indicator.style.color = "var(--state-connected, #2e8b2e)";
+  } else {
+    indicator.textContent = "✗ no response";
+    indicator.style.color = "#c00";
+  }
+}
+
+async function openManageQueueTabs() {
+  openModal("manageQueueTabsModal");
   el("queueSearch").value = "";
   const list = el("queueList");
   list.innerHTML = "<div style='padding:8px;color:var(--win-muted)'>Loading queues…</div>";
@@ -3318,21 +3366,11 @@ async function openSettings() {
     if (divisionsById.size === 0) await fetchAllDivisions();
     renderQueueList("");
     renderTabGroupsSection();
-    // Populate emergency-queue dropdown from monitored queues.
-    const emg = el("emergencyQueueSel");
-    emg.innerHTML = '<option value="">(none)</option>' +
-      [...queuesById.values()].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-        .map(q => `<option value="${escape(q.id)}" ${q.id === settings.emergencyQueueId ? "selected" : ""}>${escape(q.name)}</option>`).join("");
-    emg.onchange = () => { settings.emergencyQueueId = emg.value; saveSettings(); };
-    el("alertModeSel").onchange = () => { settings.alertMode = el("alertModeSel").value; saveSettings(); renderMyPresence(); };
-    el("supervisorOverride").onchange = () => { settings.supervisorOverride = el("supervisorOverride").checked; saveSettings(); applyRoleVisibility(); };
   } catch (e) {
     list.innerHTML = `<div style='padding:8px;color:#c00'>Queue load failed: ${escape(e.message)}</div>`;
   }
   el("queueSearch").oninput = () => renderQueueList(el("queueSearch").value);
-  el("extensionIdInput").oninput = () => { settings.extensionId = el("extensionIdInput").value.trim(); saveSettings(); };
-  el("envInput").onchange = () => { CONFIG.environment = el("envInput").value.trim(); saveSettings(); };
-  el("settingsClose").onclick = () => closeModal("settingsModal");
+  el("manageQueueTabsClose").onclick = () => closeModal("manageQueueTabsModal");
 }
 
 function renderQueueList(filter) {
@@ -3638,8 +3676,14 @@ function openColsModal() {
 //  Settings persistence
 // ================================================================
 function loadSettings() {
-  const defaults = { extensionId: "", emergencyQueueId: "", alertMode: "auto", supervisorOverride: false };
-  try { settings = { ...defaults, ...JSON.parse(localStorage.getItem(STORAGE.settings) || "{}") }; } catch { settings = { ...defaults }; }
+  const defaults = { extensionId: "", emergencyQueueId: "", alertMode: "auto" };
+  try {
+    const loaded = JSON.parse(localStorage.getItem(STORAGE.settings) || "{}");
+    // Drop legacy supervisorOverride if present in stored settings — role
+    // gating is now driven solely by the actual GC role assignment.
+    delete loaded.supervisorOverride;
+    settings = { ...defaults, ...loaded };
+  } catch { settings = { ...defaults }; }
   loadQueueTabs();
   try { const s = localStorage.getItem(STORAGE.colsMy); if (s) myCols = JSON.parse(s); } catch {}
   try { const s = localStorage.getItem(STORAGE.colsQueue); if (s) queueCols = stripRemovedQueueCols(JSON.parse(s)); } catch {}
@@ -3699,6 +3743,7 @@ function handleMenuCmd(cmd) {
     case "toggleDirectory": toggleDir(); break;
     case "customizeCols": openColsModal(); break;
     case "reload": location.reload(); break;
+    case "manageQueueTabs": openManageQueueTabs(); break;
     case "popout": triggerPopout(); break;
     case "popin":
       if (isPopoutMode()) window.close();
@@ -3730,7 +3775,6 @@ function wireStatusBar() {
     openAcdStatusMenu(rect.left, rect.bottom + 2);
   });
   el("sbNote").addEventListener("click", openStatusNoteEditor);
-  el("sbAlertMode").addEventListener("click", toggleAlertMode);
 }
 
 function wireDirectory() {
@@ -4334,10 +4378,12 @@ async function fetchMyRoles() {
 }
 
 function applyRoleVisibility() {
-  const show = userIsSupervisor || settings.supervisorOverride;
+  // Listen / Coach / Barge are gated purely on the actual GC role assignment
+  // (fetched in fetchMyRoles). No user-toggle override — if the role isn't
+  // there the buttons stay hidden.
   for (const act of ["listen", "coach", "barge"]) {
     const b = document.querySelector(`.tbtn[data-act="${act}"]`);
-    if (b) b.style.display = show ? "" : "none";
+    if (b) b.style.display = userIsSupervisor ? "" : "none";
   }
 }
 
