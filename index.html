@@ -901,7 +901,7 @@
         <tbody>
           <tr>
             <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-onqueue)"></span></td>
-            <td style="padding:3px 8px;border:1px solid var(--win-border)">Idle</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">On Queue</td>
             <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>IDLE</code></td>
             <td style="padding:3px 8px;border:1px solid var(--win-border)">On queue and ready to take a call.</td>
           </tr>
@@ -2428,7 +2428,7 @@ function renderStats() {
 
   const groups = [
     { key: "agents", title: "Agents (routing status)", items: [
-      ["Idle",           agentCounts.idle],
+      ["On Queue",       agentCounts.idle],
       ["Interacting",    agentCounts.interacting],
       ["Communicating",  agentCounts.communicating],
       ["Not Responding", agentCounts.notresp],
@@ -2500,7 +2500,7 @@ function renderDirectory() {
 // match what the GC native UI shows.
 const AGENT_BUCKETS = ["idle","interacting","communicating","notresp","offqueue"];
 const AGENT_BUCKET_LABEL = {
-  idle:          "Idle",
+  idle:          "On Queue",   // matches the agent-facing GC presence label
   interacting:   "Interacting",
   communicating: "Communicating",
   notresp:       "Not Responding",
@@ -3665,6 +3665,10 @@ function openCreateGroupModal(opts = {}) {
     renderQueueList(el("queueSearch")?.value || "");
     refreshSubscriptions().catch(() => {});
     for (const qid of qids) seedQueueCalls(qid).catch(() => {});
+    // Refresh queue members for the (now possibly larger) active tab so
+    // the directory + Workgroup Stats agent counts reflect the newly-added
+    // queues' members, not just the prior set.
+    fetchActiveTabMembers();
     closeModal("createGroupModal");
     showBanner({
       type: "info",
