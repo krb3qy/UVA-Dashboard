@@ -2203,8 +2203,10 @@ function renderToolbar() {
 //   oOffQueueUsers) come with qualifier fields. Preserve each qualifier
 //   separately using keys like `oOnQueueUsers_INTERACTING` so renderStats
 //   can sum them when it wants a total.
-// Time-based observation metrics return stats.max as a duration in ms; we
-// want max-of-max across groups (not sum) and stored as seconds for display.
+// Time-based observation metrics: stats.calculatedMetricValue is the
+// epoch-ms START TIME of the longest-running observation (NOT a duration).
+// Elapsed seconds = (Date.now() - calculatedMetricValue) / 1000. count=0
+// means no observation, so the field is absent.
 const TIME_METRICS = new Set(["oLongestWaiting", "oLongestInteracting"]);
 function flattenObservationEvent(body) {
   const out = {};
@@ -2213,8 +2215,9 @@ function flattenObservationEvent(body) {
     let v = null;
     if (stats) {
       if (TIME_METRICS.has(metric)) {
-        // Use the longest observation in this group, in seconds.
-        if (typeof stats.max === "number") v = stats.max / 1000;
+        if (stats.count > 0 && typeof stats.calculatedMetricValue === "number") {
+          v = Math.max(0, (Date.now() - stats.calculatedMetricValue) / 1000);
+        }
       } else {
         v = stats.count ?? stats.sum ?? stats.max ?? stats.ratio ?? null;
       }
@@ -3851,7 +3854,83 @@ function toggleDir() {
 // ================================================================
 //  Row selection / context menu / header context menu
 // ================================================================
+// Click-and-drag multi-select state for queue rows. mousedown captures the
+// anchor row + initial selection set; mousemove extends a contiguous range
+// from anchor to whichever row the cursor is over; mouseup commits.
+let dragSelect = null;
+
+function setupDragSelect() {
+  document.addEventListener("mousedown", (e) => {
+    // Only fire on primary button, only on queue-scope rows, ignore if user
+    // is starting a ctrl/shift click (those are handled by the click path).
+    if (e.button !== 0) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const tr = e.target.closest("tr.row");
+    if (!tr || tr.dataset.scope !== "queue") return;
+    // Don't hijack clicks on interactive elements inside a row (e.g. a
+    // future dropdown). Plain td cells are fine.
+    if (e.target.closest("button, input, select, a")) return;
+
+    const tbody = tr.parentElement;
+    if (!tbody) return;
+    const allRows = [...tbody.querySelectorAll("tr.row")];
+    const anchorIdx = allRows.indexOf(tr);
+    if (anchorIdx === -1) return;
+    dragSelect = {
+      tbody, allRows, anchorIdx,
+      lastIdx: anchorIdx,
+      moved: false,
+      // Snapshot the existing multi-set so we restore it cleanly if the user
+      // ends up doing a single click with no drag (delegated to the click
+      // handler later).
+      initialSet: new Set(queueViewSelectedIds)
+    };
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!dragSelect) return;
+    const tr = e.target.closest("tr.row");
+    if (!tr || tr.dataset.scope !== "queue") return;
+    const idx = dragSelect.allRows.indexOf(tr);
+    if (idx === -1 || idx === dragSelect.lastIdx) return;
+    dragSelect.moved = true;
+    dragSelect.lastIdx = idx;
+    const lo = Math.min(dragSelect.anchorIdx, idx);
+    const hi = Math.max(dragSelect.anchorIdx, idx);
+    queueViewSelectedIds.clear();
+    for (let i = lo; i <= hi; i++) {
+      const id = dragSelect.allRows[i]?.dataset.id;
+      if (id) queueViewSelectedIds.add(id);
+    }
+    // Most-recently-hovered row is the focus for action toolbar context.
+    const focusId = dragSelect.allRows[idx]?.dataset.id;
+    if (focusId) { selectedCallId = focusId; selectedCallScope = "queue"; }
+    renderAll();
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragSelect) return;
+    const moved = dragSelect.moved;
+    dragSelect = null;
+    if (moved) {
+      // The drag committed a multi-select; the click that follows the
+      // mouseup would otherwise clear it (plain click clears multi-set).
+      // Swallow the next click on a row for one tick.
+      const swallow = (e) => {
+        const tr = e.target.closest("tr.row");
+        if (tr && tr.dataset.scope === "queue") {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+        document.removeEventListener("click", swallow, true);
+      };
+      document.addEventListener("click", swallow, true);
+    }
+  });
+}
+
 function wireRowSelection() {
+  setupDragSelect();
   document.addEventListener("click", (e) => {
     // row click
     const tr = e.target.closest("tr.row");
