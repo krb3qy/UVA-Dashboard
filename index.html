@@ -33,6 +33,7 @@
       --presence-available: #2e8b2e;
       --presence-busy: #c40000;
       --presence-othercall: #d97706;
+      --presence-notresp: #e07b00;
       --presence-away: #e07b00;
       --presence-onqueue: #3ba9e0;
       --presence-offline: #888888;
@@ -260,6 +261,7 @@
     .dir-row .p-dot.available { background: var(--presence-available); }
     .dir-row .p-dot.busy { background: var(--presence-busy); }
     .dir-row .p-dot.othercall { background: var(--presence-othercall); }
+    .dir-row .p-dot.notresp { background: var(--presence-notresp); }
     .dir-row .p-dot.away { background: var(--presence-away); }
     .dir-row .p-dot.onqueue { background: var(--presence-onqueue); }
     .dir-row .p-dot.offline { background: var(--presence-offline); }
@@ -885,7 +887,50 @@
       <h3 style="margin:0 0 6px 0;font-size:13px">Directory</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
         <li>Members of the active tab's queues, sortable by name / presence / routing status.</li>
+        <li>Each agent's dot color and label come straight from their GC routing status — same buckets the Workgroup Stats panel counts.</li>
       </ul>
+      <table style="border-collapse:collapse;font-size:11px;margin:0 0 12px 18px;border:1px solid var(--win-border)">
+        <thead>
+          <tr style="background:#f0f0f0">
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Dot</th>
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Label</th>
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">GC routing status</th>
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-onqueue)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Idle</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>IDLE</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">On queue and ready to take a call.</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-busy)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Interacting</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>INTERACTING</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Handling an ACD interaction (queue-routed call) — including ACW wrap-up.</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-busy)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Communicating</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>COMMUNICATING</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Handling a non-ACD interaction (direct dial, internal extension, transfer-in).</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-notresp)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Not Responding</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>NOT_RESPONDING</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">An ACD call was offered and the agent didn't answer in time. Routing skips them until cleared.</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-offline)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Off Queue</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>OFF_QUEUE</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Off queue — won't receive ACD calls regardless of presence.</td>
+          </tr>
+        </tbody>
+      </table>
 
       <h3 style="margin:0 0 6px 0;font-size:13px">Conference Dialer</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
@@ -893,10 +938,11 @@
         <li>Outbound CID defaults to your personal line; pick a queue to present that queue's number instead.</li>
       </ul>
 
-      <h3 style="margin:0 0 6px 0;font-size:13px">Emergency Alert</h3>
+      <h3 style="margin:0 0 6px 0;font-size:13px">Queue Alerts</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
-        <li>Set the <strong>Emergency queue</strong> in Preferences. When a call enters that queue, a red flashing banner + tone fires.</li>
-        <li><strong>Alerts</strong> status-bar chunk cycles modes (auto / dashboard / extension / both / off).</li>
+        <li>Configure under <strong>File &gt; Alert Settings</strong>. Add a rule per queue with its own sound and banner color.</li>
+        <li>When a call enters a watched queue, a flashing banner in the rule's color appears with the rule's sound. Click the banner's <strong>Pick Up</strong> to answer, or <strong>Dismiss</strong> to silence.</li>
+        <li>The status-bar <strong>Alerts</strong> chunk shows on/off based on the master toggle and whether any rule with a queue is enabled. Hover for the active rules at-a-glance.</li>
       </ul>
 
       <h3 style="margin:0 0 6px 0;font-size:13px">Workspaces</h3>
@@ -2356,34 +2402,18 @@ function renderStats() {
   if (oldestWaitMs     !== null) s.oLongestWaiting     = (Date.now() - oldestWaitMs)     / 1000;
   if (oldestInteractMs !== null) s.oLongestInteracting = (Date.now() - oldestInteractMs) / 1000;
 
+  // Agent counts use the SAME bucketing function as the directory below
+  // — straight GC routing-status enum. By construction the count of each
+  // bucket here equals the number of dots of the matching color in the
+  // directory, and every member is counted in exactly one bucket.
   const memberIds = new Set();
   for (const q of qids) {
     const set = queueMembers.get(q);
     if (set) for (const uid of set) memberIds.add(uid);
   }
-  // Count connected calls in this tab's queues. Each connected call = one
-  // agent handling it. Previously we tried to dedupe unique assignedUserId
-  // across conversations, but placeholder rows from the observation seed
-  // don't have assignedUserId populated until the per-conversation upgrade
-  // GET completes — so when the upgrade lagged or failed silently, this
-  // showed 0 even with 7 active calls in the queue. Counting the conv
-  // rows directly is both more reliable and what the user actually wants
-  // ("how many calls are being handled right now in this tab").
-  let onCall = 0;
-  for (const conv of conversations.values()) {
-    if (conv.disconnected) continue;
-    if (!conv.queueId || !tabQids.has(conv.queueId)) continue;
-    if (conv.stateKey === "connected") onCall++;
-  }
-  let onQueue = 0, notResp = 0, offQueue = 0;
+  const agentCounts = { idle: 0, interacting: 0, communicating: 0, notresp: 0, offqueue: 0 };
   for (const uid of memberIds) {
-    const rs = (usersById.get(uid)?.routingStatus || "").toUpperCase();
-    if (rs === "OFF_QUEUE" || rs === "") offQueue++;
-    else if (rs === "INTERACTING" || rs === "COMMUNICATING") {
-      // On a call — counted in onCall (conversation-based), not on-queue.
-    }
-    else if (rs === "NOT_RESPONDING") notResp++;
-    else onQueue++; // IDLE / available
+    agentCounts[agentBucket(usersById.get(uid))]++;
   }
 
   const ZERO_IF_MISSING = new Set([
@@ -2398,10 +2428,11 @@ function renderStats() {
 
   const groups = [
     { key: "agents", title: "Agents (routing status)", items: [
-      ["On Queue",       onQueue],
-      ["On a Call",      onCall],
-      ["Not Responding", notResp],
-      ["Off Queue",      offQueue]
+      ["Idle",           agentCounts.idle],
+      ["Interacting",    agentCounts.interacting],
+      ["Communicating",  agentCounts.communicating],
+      ["Not Responding", agentCounts.notresp],
+      ["Off Queue",      agentCounts.offqueue]
     ]},
     { key: "waiting", title: "Interactions in queue", items: [
       ["Waiting",     metricValue("oWaiting")],
@@ -2463,6 +2494,34 @@ function renderDirectory() {
   else                           renderDirectoryAgents();
 }
 
+// Single source of truth for agent state classification — used by BOTH
+// the Workgroup Stats "Agents (routing status)" group and the directory
+// dot/label per row. Mirrors GC's routing-status enum exactly so labels
+// match what the GC native UI shows.
+const AGENT_BUCKETS = ["idle","interacting","communicating","notresp","offqueue"];
+const AGENT_BUCKET_LABEL = {
+  idle:          "Idle",
+  interacting:   "Interacting",
+  communicating: "Communicating",
+  notresp:       "Not Responding",
+  offqueue:      "Off Queue"
+};
+const AGENT_BUCKET_DOT = {
+  idle:          "onqueue",  // light blue
+  interacting:   "busy",     // red
+  communicating: "busy",     // red — same as Interacting per GC native UI
+  notresp:       "notresp",  // orange
+  offqueue:      "offline"   // grey
+};
+function agentBucket(member) {
+  const rs = (member?.routingStatus || "").toUpperCase();
+  if (rs === "INTERACTING")     return "interacting";
+  if (rs === "COMMUNICATING")   return "communicating";
+  if (rs === "NOT_RESPONDING")  return "notresp";
+  if (rs === "OFF_QUEUE" || rs === "") return "offqueue";
+  return "idle"; // IDLE / on-queue and ready
+}
+
 function renderDirectoryAgents() {
   const body = el("dirBody");
   const qids = activeTabQueueIds();
@@ -2488,35 +2547,16 @@ function renderDirectoryAgents() {
   let members = [...union].map(id => usersById.get(id) || { id, name: id });
   if (filter) members = members.filter(m => nameOf(m).includes(filter));
 
-  // Three on-call buckets, all factually grounded (verified via gc.exe):
-  //   "queue"  — match in this tab's call list (same source as stats "On a Call")
-  //   "acd"    — routingStatus INTERACTING but no match: ACD call in another
-  //              queue, or ACW for a call that just ended
-  //   "direct" — routingStatus COMMUNICATING: non-ACD voice call (direct dial,
-  //              internal extension, transfer-in not via queue)
-  const qidSet = new Set(qids);
-  const onCallByConv = new Set();
-  for (const r of conversations.values()) {
-    if (r.stateKey === "connected" && r.assignedUserId && r.queueId && qidSet.has(r.queueId)) {
-      onCallByConv.add(r.assignedUserId);
-    }
-  }
-  const callState = (m) => {
-    if (onCallByConv.has(m.id)) return "queue";
-    if (m.routingStatus === "INTERACTING") return "acd";
-    if (m.routingStatus === "COMMUNICATING") return "direct";
-    return null;
-  };
-  const callRank = (cs) => cs === "queue" ? 0 : (cs === "acd" || cs === "direct") ? 1 : 99;
-
+  // Straight GC routing-status mapping — no client-side reinvention.
+  // Stats panel and directory both classify via agentBucket() so the
+  // counts in 'Agents (routing status)' equal the count of dots of each
+  // color in the directory below, by construction.
+  const bucketRank = { idle: 0, interacting: 1, communicating: 1, notresp: 2, offqueue: 3 };
   members.sort((a, b) => {
     if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
     if (dirSortMode === "presence") {
-      const cra = callRank(callState(a)), crb = callRank(callState(b));
-      if (cra !== crb) return cra - crb;
-      if (cra < 99) return nameOf(a).localeCompare(nameOf(b));
-      const ra = presenceRank[a.presence || "offline"] ?? 99;
-      const rb = presenceRank[b.presence || "offline"] ?? 99;
+      const ra = bucketRank[agentBucket(a)] ?? 99;
+      const rb = bucketRank[agentBucket(b)] ?? 99;
       if (ra !== rb) return ra - rb;
       return nameOf(a).localeCompare(nameOf(b));
     }
@@ -2548,22 +2588,13 @@ function renderDirectoryAgents() {
   body.innerHTML = members.map(m => {
     const p = m.presence || "offline";
     const raw = formatPresenceName(m.presenceRaw);
-    const baseLabel = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
-    const cs = callState(m);
-    const dotClass = cs === "queue" ? "busy"
-                   : (cs === "acd" || cs === "direct") ? "othercall"
-                   : p;
-    const label = cs === "queue"  ? "On Call"
-                : cs === "acd"    ? "On ACD Call"
-                : cs === "direct" ? "On Direct Call"
-                : baseLabel;
-    const tipState = cs === "queue"  ? `On Call (${baseLabel})`
-                   : cs === "acd"    ? `On ACD call from another queue or in wrap-up (${baseLabel})`
-                   : cs === "direct" ? `On a non-ACD call — direct dial, internal extension, or transfer (${baseLabel})`
-                   : baseLabel;
+    const presenceLabel = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
+    const bucket = agentBucket(m);
+    const dotClass = AGENT_BUCKET_DOT[bucket] || p;
+    const label    = AGENT_BUCKET_LABEL[bucket] || presenceLabel;
     const sel = dirSelectedUsers.has(m.id) ? " selected" : "";
     const qlist = (userQueues.get(m.id) || []).join(", ");
-    const tip = `${m.name || m.id}\n${tipState}${qlist ? `\nMember of: ${qlist}` : ""}`;
+    const tip = `${m.name || m.id}\n${label} · presence ${presenceLabel}${qlist ? `\nMember of: ${qlist}` : ""}`;
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}" title="${escape(tip)}">
       <span class="p-dot ${dotClass}" title="${escape(label)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
