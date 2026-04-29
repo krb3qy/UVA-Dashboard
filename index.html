@@ -887,9 +887,10 @@
       <h3 style="margin:0 0 6px 0;font-size:13px">Directory</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
         <li>Members of the active tab's queues, sortable by name / presence / routing status.</li>
-        <li>Each agent's dot color and label come straight from their GC routing status — same buckets the Workgroup Stats panel counts.</li>
+        <li>Each agent's dot uses GC's routing status when they're actively on queue. When their routing status is <code>OFF_QUEUE</code>, the dot falls through to their <strong>presence</strong> instead — so an Available agent reads green, not generic grey "Off Queue."</li>
       </ul>
-      <table style="border-collapse:collapse;font-size:11px;margin:0 0 12px 18px;border:1px solid var(--win-border)">
+      <p style="font-size:11px;margin:0 0 4px 18px;color:var(--win-muted)">Routing-status states (agent is on queue):</p>
+      <table style="border-collapse:collapse;font-size:11px;margin:0 0 8px 18px;border:1px solid var(--win-border)">
         <thead>
           <tr style="background:#f0f0f0">
             <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Dot</th>
@@ -923,11 +924,42 @@
             <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>NOT_RESPONDING</code></td>
             <td style="padding:3px 8px;border:1px solid var(--win-border)">An ACD call was offered and the agent didn't answer in time. Routing skips them until cleared.</td>
           </tr>
+        </tbody>
+      </table>
+      <p style="font-size:11px;margin:0 0 4px 18px;color:var(--win-muted)">Off-queue states (routing status is <code>OFF_QUEUE</code>; dot reflects presence):</p>
+      <table style="border-collapse:collapse;font-size:11px;margin:0 0 12px 18px;border:1px solid var(--win-border)">
+        <thead>
+          <tr style="background:#f0f0f0">
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Dot</th>
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Label</th>
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">GC presence</th>
+            <th style="text-align:left;padding:3px 8px;border:1px solid var(--win-border)">Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-available)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Available</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>AVAILABLE</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Signed in but not on queue. Could go on queue.</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-busy)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Busy</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>BUSY</code> / <code>MEETING</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Self-selected busy.</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-away)"></span></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Away / Break / Meal / Training</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>AWAY</code> / <code>BREAK</code> / <code>MEAL</code> / <code>TRAINING</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Stepped away. Won't receive calls.</td>
+          </tr>
           <tr>
             <td style="padding:3px 8px;border:1px solid var(--win-border)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--presence-offline)"></span></td>
-            <td style="padding:3px 8px;border:1px solid var(--win-border)">Off Queue</td>
-            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>OFF_QUEUE</code></td>
-            <td style="padding:3px 8px;border:1px solid var(--win-border)">Off queue — won't receive ACD calls regardless of presence.</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Offline / Off Queue</td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)"><code>OFFLINE</code> / <code>OFF_QUEUE</code></td>
+            <td style="padding:3px 8px;border:1px solid var(--win-border)">Not signed in or explicitly off queue.</td>
           </tr>
         </tbody>
       </table>
@@ -2552,12 +2584,21 @@ function renderDirectoryAgents() {
   // counts in 'Agents (routing status)' equal the count of dots of each
   // color in the directory below, by construction.
   const bucketRank = { idle: 0, interacting: 1, communicating: 1, notresp: 2, offqueue: 3 };
+  // Within the off-queue bucket, sub-sort by presence so Available reads
+  // before Busy/Away/Offline. Matches the smart-blend display order.
+  const offQueuePresenceRank = { available: 0, onqueue: 1, busy: 2, away: 3, offline: 4 };
   members.sort((a, b) => {
     if (dirSortMode === "name-desc") return nameOf(b).localeCompare(nameOf(a));
     if (dirSortMode === "presence") {
-      const ra = bucketRank[agentBucket(a)] ?? 99;
-      const rb = bucketRank[agentBucket(b)] ?? 99;
+      const ba = agentBucket(a), bb = agentBucket(b);
+      const ra = bucketRank[ba] ?? 99;
+      const rb = bucketRank[bb] ?? 99;
       if (ra !== rb) return ra - rb;
+      if (ba === "offqueue") {
+        const pa = offQueuePresenceRank[a.presence || "offline"] ?? 99;
+        const pb = offQueuePresenceRank[b.presence || "offline"] ?? 99;
+        if (pa !== pb) return pa - pb;
+      }
       return nameOf(a).localeCompare(nameOf(b));
     }
     return nameOf(a).localeCompare(nameOf(b));
@@ -2590,11 +2631,22 @@ function renderDirectoryAgents() {
     const raw = formatPresenceName(m.presenceRaw);
     const presenceLabel = raw !== "—" ? raw : (bucketLabel[p] || "Offline");
     const bucket = agentBucket(m);
-    const dotClass = AGENT_BUCKET_DOT[bucket] || p;
-    const label    = AGENT_BUCKET_LABEL[bucket] || presenceLabel;
+    // Option B (smart blend): if the agent is actively on queue (Idle /
+    // Interacting / Communicating / Not Responding) we show that routing
+    // state. Otherwise routingStatus is OFF_QUEUE and we fall through to
+    // their actual presence — so an Available off-queue agent reads as
+    // "Available" (green) instead of generic "Off Queue" (grey).
+    let dotClass, label;
+    if (bucket === "offqueue") {
+      dotClass = p;
+      label    = presenceLabel;
+    } else {
+      dotClass = AGENT_BUCKET_DOT[bucket];
+      label    = AGENT_BUCKET_LABEL[bucket];
+    }
     const sel = dirSelectedUsers.has(m.id) ? " selected" : "";
     const qlist = (userQueues.get(m.id) || []).join(", ");
-    const tip = `${m.name || m.id}\n${label} · presence ${presenceLabel}${qlist ? `\nMember of: ${qlist}` : ""}`;
+    const tip = `${m.name || m.id}\n${label}${qlist ? `\nMember of: ${qlist}` : ""}`;
     return `<div class="dir-row${sel}" data-uid="${escape(m.id)}" title="${escape(tip)}">
       <span class="p-dot ${dotClass}" title="${escape(label)}"></span>
       <span class="name">${escape(m.name || m.id)}</span>
