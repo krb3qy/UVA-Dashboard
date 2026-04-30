@@ -1063,6 +1063,12 @@
 <!-- FLOATING CALL WIDGETS -->
 <div id="callWidgetHost"></div>
 
+<!-- WEBRTC SDK AUDIO SINK -->
+<audio id="gcSdkAudio" autoplay></audio>
+
+<!-- Genesys Cloud WebRTC SDK (optional — Phase 1 behind localStorage flag gc_uvad_sdk=on) -->
+<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js" crossorigin="anonymous"></script>
+
 <script>
 // ================================================================
 //  Security gate — only run inside GC iframe OR as popout with token
@@ -1088,7 +1094,7 @@
 const CONFIG = {
   clientId: "acd9ac35-984e-4f30-bb46-426160f498e0",
   environment: "usw2.pure.cloud",
-  scope: "routing conversations user-basic-info notifications analytics:readonly presence users:readonly"
+  scope: "authorization organization routing conversations user-basic-info notifications analytics:readonly presence users:readonly"
 };
 
 const STORAGE = {
@@ -1126,6 +1132,20 @@ const queueMembers = new Map();    // queueId → Set of userIds
 const queueStats = new Map();      // queueId → observation object
 const queueWrapupCodes = new Map(); // queueId → [wrapup codes]
 let currentUser = null;            // {id, name, stationId, ...}
+
+// Genesys Cloud WebRTC SDK runtime state. The dashboard becomes a
+// WebRTC station for the user — calls ring / pick up / merge with
+// audio in THIS tab, no bouncing to GC native client. Phase 1 ships
+// behind localStorage["gc_uvad_sdk"]==="on" so we can land code with
+// zero behavior change for users who haven't opted in.
+let gcSdk = null;
+let gcSdkReady = false;
+let gcSdkError = null;
+const gcSdkSessions = new Map();   // convId → {sessionId, hasMedia, mute, hold, autoAnswer, pending}
+const sdkHasSession   = (cid) => gcSdkSessions.has(cid);
+const sdkSessionLive  = (cid) => !!gcSdkSessions.get(cid)?.hasMedia;
+const sdkSessionMuted = (cid) => !!gcSdkSessions.get(cid)?.mute;
+const sdkSessionHeld  = (cid) => !!gcSdkSessions.get(cid)?.hold;
 // Tab-group model: each tab can hold 1..N queues with an optional name
 // and optional division filter. Single-queue tabs behave exactly like the
 // old model. Multi-queue tabs show calls from any included queue and can
@@ -5415,6 +5435,114 @@ function openStatusNoteEditor() {
   el("sbNote").textContent = statusNoteText ? `Note: ${statusNoteText}` : "Note: —";
 }
 
+// ================================================================
+//  Genesys Cloud WebRTC SDK — bring audio into THIS tab
+// ================================================================
+// Phase 1: behind feature flag localStorage["gc_uvad_sdk"]==="on".
+// When the SDK is up, the dashboard tab IS the user's WebRTC station —
+// calls ring here directly, hold/mute/end act on the local RTP, and a
+// multi-call merge fires N /replace/agent Attended in rapid succession,
+// SDK auto-accepts each pendingSession, and one /conference PATCH at
+// the end ties them together. No bouncing to GC native client.
+function isSdkFeatureEnabled() {
+  try { return localStorage.getItem("gc_uvad_sdk") === "on"; } catch { return false; }
+}
+
+async function initWebrtcSdk() {
+  if (gcSdk || gcSdkReady) return;
+  if (!isSdkFeatureEnabled()) { console.info("[gcSdk] feature flag off — skipping (set localStorage gc_uvad_sdk=on to enable)"); return; }
+  if (!getToken() || !currentUser?.id) { console.info("[gcSdk] no token / user — skipping"); return; }
+  // Only WebRTC-station users get the SDK. Deskphone / remote-phone users
+  // already have audio at their own device; the SDK media path doesn't
+  // help them and would just cause confusion if init succeeded.
+  const t = (currentUser.stationType || "").toLowerCase();
+  if (!t.includes("webrtc")) { console.info("[gcSdk] stationType is", currentUser.stationType, "— SDK skipped"); return; }
+  // Resolve the SDK constructor — the bundle exposes either
+  // window.GenesysCloudWebrtcSdk.GenesysCloudWebrtcSdk (namespaced) or
+  // window.GenesysCloudWebrtcSdk directly depending on bundle version.
+  const ns = window.GenesysCloudWebrtcSdk;
+  const Ctor = (ns && ns.GenesysCloudWebrtcSdk) || ns || window.genesysCloudWebrtcSdk;
+  if (typeof Ctor !== "function") {
+    gcSdkError = "WebRTC SDK bundle didn't expose a constructor";
+    console.error("[gcSdk]", gcSdkError, ns);
+    showSdkUnavailableBanner(gcSdkError);
+    return;
+  }
+  try {
+    gcSdk = new Ctor({
+      accessToken: getToken(),
+      environment: CONFIG.environment,
+      autoConnectSessions: true,
+      defaults: { audioElement: el("gcSdkAudio") },
+      logLevel: "warn"
+    });
+    wireSdkEvents();
+    await gcSdk.initialize();
+    gcSdkReady = true;
+    console.info("[gcSdk] ready");
+    setStatus("Live", "ok");
+    try {
+      const concurrent = gcSdk.isConcurrentSoftphoneSessionsEnabled?.();
+      const persistent = gcSdk.isPersistentConnectionEnabled?.();
+      console.info("[gcSdk] concurrent:", concurrent, "persistent:", persistent);
+    } catch {}
+  } catch (e) {
+    gcSdkError = e?.message || String(e);
+    gcSdk = null;
+    console.error("[gcSdk] initialize failed:", e);
+    showSdkUnavailableBanner(gcSdkError);
+  }
+}
+
+function wireSdkEvents() {
+  if (!gcSdk || typeof gcSdk.on !== "function") return;
+  gcSdk.on("pendingSession", (s) => {
+    console.info("[gcSdk] pendingSession", s?.conversationId, "auto?", s?.autoAnswer);
+    const cid = s?.conversationId; if (!cid) return;
+    const cur = gcSdkSessions.get(cid) || {};
+    gcSdkSessions.set(cid, { ...cur, sessionId: s.sessionId, pending: true, autoAnswer: !!s.autoAnswer });
+    // autoConnectSessions:true means the SDK auto-accepts. If we ever
+    // turn that off we'd call gcSdk.acceptPendingSession here.
+    renderCallWidgets();
+  });
+  gcSdk.on("sessionStarted", (sess) => {
+    console.info("[gcSdk] sessionStarted", sess?.conversationId || sess?.id);
+    const cid = sess?.conversationId;
+    if (!cid) return;
+    const cur = gcSdkSessions.get(cid) || {};
+    gcSdkSessions.set(cid, { ...cur, sessionId: sess.id || sess.sessionId, pending: false, hasMedia: true });
+    renderCallWidgets();
+  });
+  gcSdk.on("sessionEnded", (sess, reason) => {
+    console.info("[gcSdk] sessionEnded", sess?.conversationId || sess?.id, reason?.condition);
+    const cid = sess?.conversationId;
+    if (cid) gcSdkSessions.delete(cid);
+    renderCallWidgets();
+  });
+  gcSdk.on("station", (info) => {
+    console.info("[gcSdk] station", info);
+    try { renderMyPresence(); } catch {}
+  });
+  gcSdk.on("error", (err) => {
+    console.warn("[gcSdk] error", err);
+    if (err?.fatal) showSdkUnavailableBanner(err?.message || "WebRTC SDK fatal error");
+  });
+  gcSdk.on?.("trace", (level, msg) => {
+    if (level === "error") console.warn("[gcSdk-trace]", msg);
+  });
+}
+
+function showSdkUnavailableBanner(reason) {
+  try {
+    showBanner({
+      type: "warn",
+      title: "Audio in this tab is unavailable",
+      message: `${reason || "WebRTC SDK didn't initialize"}. Calls will ring through your Genesys client tab as before.`,
+      autoHideMs: 0
+    });
+  } catch (e) { console.warn("banner failed", e); }
+}
+
 async function init() {
   if (el("app-root").style.display !== "flex") return;
 
@@ -5457,6 +5585,10 @@ async function init() {
     setStatus("Loading queues…");
     await fetchCurrentUser();
     fetchMyRoles().then(() => applyRoleVisibility());
+    // Phase 1 WebRTC SDK boot — non-blocking; gated on feature flag and
+    // stationType=webrtc inside initWebrtcSdk(). Failures show a banner
+    // and the legacy REST path keeps working.
+    initWebrtcSdk().catch(e => console.warn("[gcSdk] init bg error", e));
     // Fetch all queue names up front so tabs render names (not ids) on first paint.
     fetchAllQueues().then(() => { renderAll(); renderTabGroupsSection(); }).catch((e) => console.warn("fetchAllQueues", e));
     fetchAllDivisions().catch(() => {});
