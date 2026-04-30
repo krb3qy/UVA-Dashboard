@@ -96,6 +96,8 @@
       margin: 4px 0; font-size: 12px; display: flex; align-items: center; gap: 10px; }
     .banner.warn { background: #fff4d6; border-color: #d4a860; }
     .banner.error { background: #ffe0e0; border-color: #c08080; }
+    .banner.info { background: #e6f4ea; border-color: #6cc070; }
+    .banner.success { background: #d8f0dc; border-color: #2b8a3e; }
     .banner-content { flex: 1; }
     .banner-title { font-weight: 600; }
     .banner-msg { color: var(--win-muted); margin-top: 2px; }
@@ -5855,10 +5857,10 @@ async function initWebrtcSdk() {
     // that the dashboard tab is now this user's WebRTC station. Auto-hides.
     try {
       showBanner({
-        type: "info",
+        type: "success",
         title: "Audio in this tab is live",
         message: "This dashboard tab is now your WebRTC softphone. Calls will ring here.",
-        autoHideMs: 4000
+        autoHideMs: 8000
       });
     } catch {}
     try {
