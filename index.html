@@ -5308,9 +5308,12 @@ async function holdMyCall(convId, held = true) {
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
   dlog.info("assign", "POST /assign", { convId, userId: currentUser.id });
+  // ConversationUser schema (verified in build/gc/models/conversationuser.go)
+  // expects exactly one field: `id`. Sending `{userId}` makes GC parse it
+  // as `{id: undefined}` → "Targeted User ID is not valid" 400.
   await apiFetch(`/api/v2/conversations/${convId}/assign`, {
     method: "POST",
-    body: { userId: currentUser.id }
+    body: { id: currentUser.id }
   });
   dlog.success("assign", "/assign accepted");
 }
