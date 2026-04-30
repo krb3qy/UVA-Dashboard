@@ -4413,48 +4413,64 @@ async function assignCallToMe(convId) {
   await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
 }
 
-// Toggle the user's voice acdAutoAnswer for the duration of an action
-// so /assign-driven merges complete without manual answering.
+// Prepare the agent for a merge: clear NOT_RESPONDING (which blocks
+// /assign) and turn on voice acdAutoAnswer so each /assign'd call
+// auto-picks-up.
 //
-// IMPORTANT: GC has TWO auto-answer mechanisms:
-//   1. /agentui/agents/autoanswer/{id}/settings → DIGITAL channels only
-//      (Email, WebMessaging, SMS, etc.). 'voice'/'call' rejected.
-//   2. PATCH /api/v2/users/{userId} with {acdAutoAnswer: true} → VOICE.
-//      This is the only voice path. Verified via Genesys Cloud
-//      Developer Community thread + swagger PatchUser model.
+// Three GC API moves, each verified in swagger.json:
+//   1. PUT  /api/v2/users/{id}/routingstatus  body {status:"IDLE"}
+//        → no perm required; clears NOT_RESPONDING. Valid enum:
+//          OFF_QUEUE / IDLE / INTERACTING / NOT_RESPONDING / COMMUNICATING.
+//   2. GET  /api/v2/users/{id}                 → read acdAutoAnswer + version
+//   3. PATCH /api/v2/users/{id}  body {acdAutoAnswer:true, version:N}
+//        → perm directory:user:edit; UpdateUser schema requires version.
 //
-// PATCH /users/{id} body uses UpdateUser schema with required `version`
-// field for optimistic locking — fetch user first to read current
-// acdAutoAnswer + version, then PATCH with both. Restore in finally.
-//   perm: admin / directory:user:edit / directory:organization:admin
-async function withAutoAnswerVoice(action) {
+// /agentui/agents/autoanswer/{id}/settings is digital-channels only —
+// 'voice'/'call' rejected. Don't use it for this.
+//
+// Restores acdAutoAnswer to the prior value in finally. routingStatus
+// isn't restored: once the merge starts, real call activity drives it
+// into INTERACTING anyway, and IDLE was the state the user wanted.
+async function withMergeReady(action) {
   if (!currentUser?.id) return action();
-  const url = `/api/v2/users/${currentUser.id}`;
-  let priorValue = false;
+  const userUrl = `/api/v2/users/${currentUser.id}`;
+  const rsUrl   = `/api/v2/users/${currentUser.id}/routingstatus`;
+  // Read prior state first so we can restore acdAutoAnswer cleanly.
+  let priorAuto = false;
   let priorVersion = null;
+  let wasNotResponding = false;
   try {
-    const u = await apiFetch(url);
-    priorValue = !!u?.acdAutoAnswer;
+    const u = await apiFetch(userUrl + "?expand=routingStatus");
+    priorAuto = !!u?.acdAutoAnswer;
     priorVersion = u?.version ?? null;
-  } catch (e) { console.warn("Failed to read acdAutoAnswer for restore", e); }
+    wasNotResponding = (u?.routingStatus?.status === "NOT_RESPONDING");
+  } catch (e) { console.warn("Failed to read user state", e); }
+  // Clear NOT_RESPONDING if set — /assign refuses NOT_RESPONDING agents.
+  if (wasNotResponding) {
+    try {
+      await apiFetch(rsUrl, { method: "PUT", body: { status: "IDLE" } });
+    } catch (e) { console.warn("Failed to clear NOT_RESPONDING", e); }
+  }
+  // Toggle voice auto-answer on for the merge duration.
   let toggled = false;
   try {
-    await apiFetch(url, { method: "PATCH", body: { acdAutoAnswer: true, version: priorVersion } });
+    await apiFetch(userUrl, { method: "PATCH", body: { acdAutoAnswer: true, version: priorVersion } });
     toggled = true;
     return await action();
   } finally {
     if (toggled) {
       try {
-        // Re-fetch the user to get the bumped version after our PATCH.
-        const u2 = await apiFetch(url);
-        await apiFetch(url, {
+        const u2 = await apiFetch(userUrl);
+        await apiFetch(userUrl, {
           method: "PATCH",
-          body: { acdAutoAnswer: priorValue, version: u2?.version ?? priorVersion }
+          body: { acdAutoAnswer: priorAuto, version: u2?.version ?? priorVersion }
         });
       } catch (e) { console.warn("Failed to restore acdAutoAnswer", e); }
     }
   }
 }
+// Backwards-compatible alias — older callers use withAutoAnswerVoice.
+const withAutoAnswerVoice = withMergeReady;
 
 // Light precheck only — we now use /replace for the assign step, which
 // requires conversation:communication:blindTransfer permission and a
