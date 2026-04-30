@@ -5026,9 +5026,10 @@ async function ensureAssignReady(convId) {
   //    INTERACTING means you have an active call; the anchor logic above
   //    should have caught that path, but if not, surface a clear error.
   const rs = u?.routingStatus?.status;
-  if (rs === "INTERACTING") {
-    throw new Error("You're INTERACTING (already on a call). Select that call as part of the merge or end it first.");
-  }
+  // INTERACTING is fine for merge — the user is on at least one call
+  // already, which is the IW-Merge use case (manual pickup, then merge
+  // additional queue calls in). No reset needed; the merge flow skips
+  // /assign for calls we're already on.
   if (rs === "NOT_RESPONDING") {
     // /routingstatus PUT only accepts the IDLE transition from NOT_RESPONDING.
     dlog.warn("merge", "routing status NOT_RESPONDING — resetting to IDLE");
@@ -5124,39 +5125,12 @@ async function mergeQueueCallsViaSdk(ids) {
   // 1. Refresh from API so we know which selected ids are already ours.
   try { await seedMyInteractions(); } catch {}
 
-  // 1a. Flip acdAutoAnswer:true for the duration. Without it, the server
-  //     refuses /assign while we're INTERACTING (rejects with invalid.id
-  //     even though Alex's id is fine — it's really 'no spare alert
-  //     channel for this agent'). With it true, GC auto-routes through
-  //     without the alert dance, and our SDK handler still picks up
-  //     each pendingSession via the sdkAutoAcceptIds path.
-  let priorAuto = null;
-  let priorVersion = null;
-  try {
-    const u = await apiFetch(`/api/v2/users/${currentUser.id}`);
-    priorAuto = !!u?.acdAutoAnswer;
-    priorVersion = u?.version ?? null;
-    if (!priorAuto) {
-      await apiFetch(`/api/v2/users/${currentUser.id}`, {
-        method: "PATCH",
-        body: { acdAutoAnswer: true, version: priorVersion }
-      });
-      dlog.info("merge", "acdAutoAnswer flipped on for merge");
-    }
-  } catch (e) { dlog.warn("merge", "acdAutoAnswer pre-flight failed (continuing anyway)", { msg: e.message }); }
-
-  const restoreAcdAutoAnswer = async () => {
-    if (priorAuto === null || priorAuto === true) return;
-    try {
-      const u = await apiFetch(`/api/v2/users/${currentUser.id}`);
-      await apiFetch(`/api/v2/users/${currentUser.id}`, {
-        method: "PATCH",
-        body: { acdAutoAnswer: false, version: u?.version ?? priorVersion }
-      });
-      dlog.info("merge", "acdAutoAnswer restored to false");
-    } catch (e) { dlog.warn("merge", "acdAutoAnswer restore failed", { msg: e.message }); }
-  };
-
+  // No acdAutoAnswer toggle: it caused GC to pre-route a call to us
+  // before our /assign loop could run, leaving us INTERACTING on a call
+  // we hadn't /assigned, which then 400d any subsequent /assign for
+  // selected calls. Cleaner without it — SDK auto-accepts each
+  // pendingSession via sdkAutoAcceptIds.
+  const restoreAcdAutoAnswer = async () => {};
   try {
 
   // 2. Pre-flight eligibility on every selected call (station, signed in)
