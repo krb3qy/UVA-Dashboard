@@ -2839,8 +2839,6 @@ async function conferenceSelectedQueueCalls() {
   const btn = el("queueActionBarConference");
   if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
   try {
-    // Step 1 — assign every selected queue call to me (skip ones I'm
-    // already on).
     const toAssign = ids.filter(id => {
       const r = conversations.get(id);
       return r && !r.hasMe && !r.disconnected;
@@ -2853,29 +2851,34 @@ async function conferenceSelectedQueueCalls() {
         return;
       }
     }
-    for (const id of toAssign) {
-      try { await assignCallToMe(id); }
-      catch (e) {
-        showBanner({ type: "error", title: "Assign failed", message: `${id}: ${e.message}`, autoHideMs: 5000 });
+    // Toggle voice acdAutoAnswer on for the duration of the merge so
+    // /assign-driven alerts pick up automatically (no NOT_RESPONDING).
+    // Restored to prior value in finally inside withAutoAnswerVoice.
+    await withAutoAnswerVoice(async () => {
+      for (const id of toAssign) {
+        try { await assignCallToMe(id); }
+        catch (e) {
+          showBanner({ type: "error", title: "Assign failed", message: `${id}: ${e.message}`, autoHideMs: 5000 });
+        }
       }
-    }
-    // Step 2 — wait for delivery, then re-fetch /api/v2/conversations
-    // (don't trust the local cache). Mirror IW-Merge's pattern: only
-    // ids the API now reports as ours are eligible to merge.
-    if (toAssign.length > 0) {
-      await new Promise(r => setTimeout(r, 3000));
-      await seedMyInteractions();
-    }
-    const myIds = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
-    const finalIds = [...new Set(myIds)];
-    if (finalIds.length < 2) {
-      showBanner({ type: "warn", title: "Nothing to merge", message: "No active calls of yours after assignment.", autoHideMs: 4000 });
-      return;
-    }
-    await mergeMany(finalIds);
-    showBanner({ type: "info", title: "Conference requested", message: `Merging ${finalIds.length} calls.`, autoHideMs: 3000 });
-    queueViewSelectedIds.clear();
-    renderAll();
+      // Step 2 — wait for delivery, then re-fetch /api/v2/conversations
+      // (don't trust the local cache). Mirror IW-Merge's pattern: only
+      // ids the API now reports as ours are eligible to merge.
+      if (toAssign.length > 0) {
+        await new Promise(r => setTimeout(r, 3000));
+        await seedMyInteractions();
+      }
+      const myIds = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
+      const finalIds = [...new Set(myIds)];
+      if (finalIds.length < 2) {
+        showBanner({ type: "warn", title: "Nothing to merge", message: "No active calls of yours after assignment.", autoHideMs: 4000 });
+        return;
+      }
+      await mergeMany(finalIds);
+      showBanner({ type: "info", title: "Conference requested", message: `Merging ${finalIds.length} calls.`, autoHideMs: 3000 });
+      queueViewSelectedIds.clear();
+      renderAll();
+    });
   } catch (e) {
     showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 5000 });
   } finally {
@@ -3402,13 +3405,8 @@ function openMergeModal(row) {
   el("mergeGo").onclick = async () => {
     const status = el("mergeStatus");
     try {
-      // Step 1 — assign queue calls to me. GC's /conference endpoint
-      // requires a common user across all active participants, so we
-      // can't merge raw queue calls directly.
-      const assignFailed = [];
+      // Pre-check: surface a clear reason if the assign would fail.
       if (queuedSel.size > 0) {
-        // Local pre-check — bail with a clear message before the API call
-        // if the user is missing a station, off queue, or not a queue member.
         for (const qid of queuedSel) {
           const why = assignEligibilityError(qid);
           if (why) {
@@ -3417,40 +3415,42 @@ function openMergeModal(row) {
             return;
           }
         }
-        status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
-        for (const qid of queuedSel) {
-          try { await assignCallToMe(qid); }
-          catch (e) { assignFailed.push({ id: qid, err: e.message }); }
+      }
+      // Toggle voice acdAutoAnswer on for the duration of the merge so
+      // /assign-driven alerts pick up automatically. Restored to prior
+      // value in finally inside withAutoAnswerVoice.
+      await withAutoAnswerVoice(async () => {
+        const assignFailed = [];
+        if (queuedSel.size > 0) {
+          status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
+          for (const qid of queuedSel) {
+            try { await assignCallToMe(qid); }
+            catch (e) { assignFailed.push({ id: qid, err: e.message }); }
+          }
+          status.textContent = `Waiting for ${queuedSel.size} call(s) to deliver…`;
+          await new Promise(r => setTimeout(r, 3000));
         }
-        // Wait for ACD routing to deliver the assigned calls. IW-Merge
-        // waits 3s here — match that.
-        status.textContent = `Waiting for ${queuedSel.size} call(s) to deliver…`;
-        await new Promise(r => setTimeout(r, 3000));
-      }
-      // Step 2 — re-fetch the user's active conversations from the API
-      // (NOT the local cache, which can lag the assign event). This is
-      // the IW-Merge pattern — the only ids we trust as 'I am a
-      // participant' are the ones in /api/v2/conversations.
-      status.textContent = "Refreshing active calls…";
-      await seedMyInteractions();
-      const myIds = [...conversations.values()]
-        .filter(r => r.hasMe && !r.disconnected)
-        .map(r => r.id);
-      // Build the merge target set: my pre-existing selections (sel)
-      // plus everything the API now reports as mine after the assign.
-      const ids = [...new Set([...sel, ...myIds])];
-      if (ids.length < 2) {
-        const why = assignFailed.length
-          ? `Not enough calls. Assign failures: ${assignFailed.map(f => f.err).join('; ')}`
-          : "Not enough calls to merge after assignment.";
-        status.textContent = why;
-        showBanner({ type: "error", title: "Merge failed", message: why, autoHideMs: 6000 });
-        return;
-      }
-      status.textContent = `Merging ${ids.length} calls…`;
-      await mergeMany(ids);
-      showBanner({ type: "info", title: "Merge requested", message: `Conferenced ${ids.length} calls.`, autoHideMs: 3000 });
-      closeModal("mergeModal");
+        // Re-fetch from /api/v2/conversations — only ids the API now
+        // reports as ours are eligible to merge (mirrors IW-Merge).
+        status.textContent = "Refreshing active calls…";
+        await seedMyInteractions();
+        const myIds = [...conversations.values()]
+          .filter(r => r.hasMe && !r.disconnected)
+          .map(r => r.id);
+        const ids = [...new Set([...sel, ...myIds])];
+        if (ids.length < 2) {
+          const why = assignFailed.length
+            ? `Not enough calls. Assign failures: ${assignFailed.map(f => f.err).join('; ')}`
+            : "Not enough calls to merge after assignment.";
+          status.textContent = why;
+          showBanner({ type: "error", title: "Merge failed", message: why, autoHideMs: 6000 });
+          return;
+        }
+        status.textContent = `Merging ${ids.length} calls…`;
+        await mergeMany(ids);
+        showBanner({ type: "info", title: "Merge requested", message: `Conferenced ${ids.length} calls.`, autoHideMs: 3000 });
+        closeModal("mergeModal");
+      });
     } catch (e) {
       status.textContent = `Merge failed: ${e.message}`;
       showBanner({ type: "error", title: "Merge failed", message: e.message, autoHideMs: 5000 });
@@ -4402,31 +4402,44 @@ async function mergeMany(convIds) {
   return target;
 }
 
-// Make the current user a participant on a queue call. Uses the SAME
-// /replace path the Pickup toolbar button uses — direct participant
-// swap, no routing/alert flow. Verified via SDK source:
-//   /assign  → goes through the routing/alert system; if the user
-//              doesn't answer the alert (because they're busy
-//              clicking Merge in the dashboard) GC marks them
-//              NOT_RESPONDING and the request fails.
-//   /replace → blind-transfer-style direct swap. User becomes a
-//              participant immediately. No alert timeout.
+// Make the current user a participant on a queue call. Uses /assign
+// (the routing/alert path) — verified via SDK that /replace is blocked
+// for ACD calls with "An ACD call cannot be transferred unattended."
+// /assign requires the user's station to actually answer the alert; we
+// accomplish that by toggling acdAutoAnswer on for the duration of the
+// merge via withAutoAnswerVoice() in the caller.
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
-  // Find an active ACD or alerting-agent participant to swap with our
-  // userId. This is the same target-finding logic as the Pickup action.
-  const conv = conversations.get(convId);
-  const target = (conv?.raw?.participants || []).find(p =>
-    (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
-  if (!target) {
-    // No live ACD/agent leg — fall back to /assign so we still try.
-    await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
-    return;
+  await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+}
+
+// Toggle the user's voice acdAutoAnswer for the duration of an action
+// so /assign-driven merges complete without manual answering. SDK:
+//   GET    /api/v2/users/agentui/agents/autoanswer/{agentId}/settings
+//   PATCH  /api/v2/users/agentui/agents/autoanswer/{agentId}/settings
+//   body:  { settings: { voice: true|false } }
+//   perm:  agentUI:agents:view, agentUI:agents:edit
+// Always restores the prior value in finally — even if the merge throws.
+async function withAutoAnswerVoice(action) {
+  if (!currentUser?.id) return action();
+  const url = `/api/v2/users/agentui/agents/autoanswer/${currentUser.id}/settings`;
+  let priorVoice = false;
+  try {
+    const r = await apiFetch(url);
+    priorVoice = !!(r?.settings?.voice);
+  } catch { /* settings may not exist yet — treat as false */ }
+  let toggled = false;
+  try {
+    await apiFetch(url, { method: "PATCH", body: { settings: { voice: true } } });
+    toggled = true;
+    return await action();
+  } finally {
+    if (toggled) {
+      try {
+        await apiFetch(url, { method: "PATCH", body: { settings: { voice: priorVoice } } });
+      } catch (e) { console.warn("Failed to restore acdAutoAnswer voice", e); }
+    }
   }
-  await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, {
-    method: "POST",
-    body: { userId: currentUser.id, voicemail: false }
-  });
 }
 
 // Light precheck only — we now use /replace for the assign step, which
