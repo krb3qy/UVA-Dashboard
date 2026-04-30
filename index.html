@@ -1140,8 +1140,11 @@
   <div class="dev-log" id="devLog"></div>
 </div>
 
-<!-- Genesys Cloud WebRTC SDK — brings call audio into this tab -->
-<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js" crossorigin="anonymous"></script>
+<!-- Genesys Cloud WebRTC SDK — brings call audio into this tab.
+     NO crossorigin attr — the GC SDK CDN doesn't send CORS headers,
+     so crossorigin="anonymous" causes the browser to fetch but refuse
+     to execute the script (window.GenesysCloudWebrtcSdk stays undefined). -->
+<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js"></script>
 
 <script>
 // ================================================================
