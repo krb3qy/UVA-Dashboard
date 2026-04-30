@@ -2919,9 +2919,9 @@ async function conferenceSelectedQueueCalls() {
   try {
     const result = await mergeQueueCallsViaSdk(ids);
     showBanner({
-      type: result.failed.length ? "warn" : "info",
+      type: "info",
       title: "Conference requested",
-      message: `Merging ${result.merged} calls.${result.failed.length ? ` ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}` : ""}`,
+      message: `${result.merged} calls conferenced${result.anchorAssigned ? " (picked up the longest-waiting call as anchor)" : ""}.`,
       autoHideMs: 4000
     });
     queueViewSelectedIds.clear();
@@ -3484,13 +3484,10 @@ function openMergeModal(row) {
       }
       status.textContent = `Merging ${ids.length} calls…`;
       const result = await mergeQueueCallsViaSdk(ids);
-      const note = result.failed.length
-        ? ` ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}`
-        : "";
       showBanner({
-        type: result.failed.length ? "warn" : "info",
+        type: "info",
         title: "Merge requested",
-        message: `Conferenced ${result.merged} calls.${note}`,
+        message: `Conferenced ${result.merged} calls${result.anchorAssigned ? " (picked up the longest-waiting call as anchor)" : ""}.`,
         autoHideMs: 4000
       });
       closeModal("mergeModal");
@@ -4481,88 +4478,106 @@ async function waitForCallReady(convId, timeoutMs = 12000) {
   return false;
 }
 
-// SDK-backed merge of N queue calls. Rapid /replace/agent Attended for
-// each (mirrors IW-Merge's pattern), SDK auto-accepts pendingSession
-// events client-side, then PATCH /conference at the end.
+// SDK-backed merge of N queue calls.
 //
-// No acdAutoAnswer toggle, no NOT_RESPONDING reset, no hold-then-assign
-// gymnastics — autoConnectSessions:true on the SDK constructor handles
-// it all client-side.
+// Architecture: pickup-one + conference-the-rest.
+//   1. If user already has a connected call, use it as the anchor.
+//      Otherwise /assign one queue call (the longest-waiting one) and
+//      let the SDK's autoConnectSessions auto-accept the pendingSession.
+//   2. Wait for the anchor to be in CONNECTED state.
+//   3. PATCH /conference on the anchor with the remaining conversation
+//      IDs as participantsToAdd. GC pulls those customers' legs into
+//      the anchor's conversation server-side — no second /assign,
+//      no INTERACTING-rejection, no concurrent-softphone dependency.
+//
+// /assign is the documented pickup verb (carries conversation:call:pull).
+// /replace/agent is a transfer endpoint and produces a transfer-target
+// leg, NOT a pendingSession on the WebRTC station — that's why the
+// previous N-replace approach failed silently.
 async function mergeQueueCallsViaSdk(ids) {
   if (!currentUser?.id) throw new Error("No current user");
   if (!ids || ids.length < 2) throw new Error("Need 2+ calls to conference");
 
-  // 1. Refresh from API so we don't try to assign a call we already own
+  // 1. Refresh from API so anchor selection is up to date
   try { await seedMyInteractions(); } catch {}
-  const toAssign = ids.filter(id => {
-    const r = conversations.get(id);
-    return r && !r.hasMe && !r.disconnected;
-  });
 
-  // 2. Pre-flight eligibility (station present, signed in)
-  for (const id of toAssign) {
+  // 2. Pre-flight eligibility on every selected call (station, signed in)
+  for (const id of ids) {
     const why = assignEligibilityError(id);
     if (why) throw new Error(why);
   }
 
-  // 2b. Clear NOT_RESPONDING if set — otherwise GC blocks new alerts and
-  //     subsequent assigns slip into NOT_RESPONDING → OFF_QUEUE cascade.
-  try {
-    const u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
-    if (u?.routingStatus?.status === "NOT_RESPONDING") {
-      await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
-        method: "PUT", body: { status: "IDLE" }
-      });
-    }
-  } catch (e) { console.warn("[merge] routingStatus precheck failed", e); }
+  // 3. Pick anchor.
+  //    Prefer an already-connected call I'm on (even if not in the
+  //    selection) — saves the extra /assign roundtrip and means I never
+  //    need to be picked up.
+  //    Otherwise pick the longest-waiting selected queue call as the
+  //    anchor: more time invested = less likely to hang up mid-merge.
+  let anchorId = [...conversations.values()]
+    .find(r => r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held"))?.id;
 
-  // 3. Fire /replace/agent Attended with 250ms spacing — gives the SDK
-  //    time to accept each pendingSession before the next alert hits.
-  //    Firing all at once was racing the SDK's accept handler and one
-  //    alert would slip through unanswered → NOT_RESPONDING.
-  const failed = [];
-  for (let i = 0; i < toAssign.length; i++) {
-    const id = toAssign[i];
-    if (!(await isCallStillActive(id))) {
-      failed.push({ id, err: "call hung up before merge" });
-      continue;
-    }
-    try { await assignCallToMe(id); }
-    catch (e) { failed.push({ id, err: await explainAssignFailure(id, e.message) }); }
-    if (i < toAssign.length - 1) await new Promise(r => setTimeout(r, 250));
-  }
+  let anchorWasAssignedHere = false;
+  if (!anchorId) {
+    // Pick the longest-waiting queue call from the selection
+    const queueCalls = ids
+      .map(id => conversations.get(id))
+      .filter(r => r && !r.hasMe && !r.disconnected)
+      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0)); // oldest first
+    const anchor = queueCalls[0];
+    if (!anchor) throw new Error("No pickup-able queue call in the selection.");
+    anchorId = anchor.id;
 
-  // 4. Wait for each call to be in CONNECTED state (sdkSessionLive +
-  //    server-side participant.state === "connected"). Bumped to 12s
-  //    because the consult-then-connect flow can take a few seconds.
-  await Promise.all(toAssign.map(id => waitForCallReady(id, 12000)));
-
-  // 5. Settle cache + build merge target list. 1500ms gives GC time to
-  //    fully transition all participants to "connected" server-side.
-  await new Promise(r => setTimeout(r, 1500));
-  await seedMyInteractions();
-  const myIds = [...conversations.values()]
-    .filter(r => r.hasMe && !r.disconnected)
-    .map(r => r.id);
-  const finalIds = [...new Set([...ids, ...myIds])]
-    .filter(id => conversations.get(id)?.hasMe);
-  if (finalIds.length < 2) {
-    const note = failed.length ? ` (${failed.map(f => f.err).join("; ")})` : "";
-    throw new Error(`Not enough calls to conference after assignment${note}`);
-  }
-
-  // 6. Merge.
-  await mergeMany(finalIds);
-
-  // 7. Unhold any held SDK sessions so the conference is live for everyone.
-  if (gcSdkReady) {
-    for (const cid of finalIds) {
-      if (sdkSessionHeld(cid)) {
-        try { await gcSdk.setHold({ conversationId: cid, hold: false }); } catch {}
+    // Reset NOT_RESPONDING if set — otherwise /assign rejects.
+    try {
+      const u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
+      if (u?.routingStatus?.status === "NOT_RESPONDING") {
+        await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
+          method: "PUT", body: { status: "IDLE" }
+        });
       }
+    } catch (e) { console.warn("[merge] routingStatus precheck failed", e); }
+
+    if (!(await isCallStillActive(anchorId))) {
+      throw new Error("Anchor queue call hung up before pickup.");
     }
+    try { await assignCallToMe(anchorId); }
+    catch (e) {
+      throw new Error(await explainAssignFailure(anchorId, e.message));
+    }
+    anchorWasAssignedHere = true;
   }
-  return { merged: finalIds.length, failed };
+
+  // 4. Wait for anchor to be CONNECTED. SDK's autoConnectSessions accepts
+  //    the pendingSession; once sessionStarted fires + participant.state
+  //    flips to "connected", we're good to conference.
+  if (anchorWasAssignedHere) {
+    const ready = await waitForCallReady(anchorId, 12000);
+    if (!ready) throw new Error("Anchor call did not connect in time. Check WebRTC station / mic permissions.");
+    // Brief settle so server-side participant state stabilizes.
+    await new Promise(r => setTimeout(r, 800));
+  }
+
+  // 5. Build the list of conversations to merge IN to the anchor —
+  //    everything in the original selection except the anchor itself,
+  //    minus any that have hung up since we started.
+  const toConference = [];
+  for (const id of ids) {
+    if (id === anchorId) continue;
+    if (await isCallStillActive(id)) toConference.push(id);
+  }
+  if (toConference.length === 0) {
+    throw new Error("No remaining calls to conference into anchor.");
+  }
+
+  // 6. PATCH /conference on the anchor; pulls the others' customer legs in.
+  await mergeMany([anchorId, ...toConference]);
+
+  // 7. If the anchor SDK session was somehow held, unhold so the conference
+  //    is live for everyone.
+  if (gcSdkReady && sdkSessionHeld(anchorId)) {
+    try { await gcSdk.setHold({ conversationId: anchorId, hold: false }); } catch {}
+  }
+  return { merged: 1 + toConference.length, anchorId, anchorAssigned: anchorWasAssignedHere };
 }
 
 // Put one of OUR calls on hold (or unhold).
@@ -4580,32 +4595,20 @@ async function holdMyCall(convId, held = true) {
   } catch (e) { console.warn(`hold ${convId} failed`, e); }
 }
 
-// Make the current user a participant on a queue call.
+// Pick up a queue call onto the current user via /assign — the documented
+// pickup verb (carries conversation:call:pull permission). The call gets
+// delivered to the user's WebRTC station as a normal ACD-alerting leg,
+// which the SDK's autoConnectSessions auto-accepts.
 //
-// Decision tree, verified against live state:
-//   /assign refuses INTERACTING agents (returns 'Targeted User ID is
-//   not valid'). So once the user has answered the first queue call,
-//   /assign on subsequent calls always fails.
-//
-//   /replace/agent (TransferToAgentRequest with transferType=Attended)
-//   alerts the target user the same way a normal queue route would —
-//   GC's client UI handles the "incoming alert while on another call"
-//   case (current call auto-holds, new alert appears). Works for both
-//   IDLE and INTERACTING agents. ACD calls require Attended transfer
-//   (Unattended is rejected by GC).
-//   Permissions: conversation:communication:blindTransfer +
-//                conversation:communication:blindTransferAgent
+// /assign rejects INTERACTING agents (no spare voice channel) — the merge
+// flow only fires this for ONE anchor call to avoid that. Subsequent
+// queue calls are merged in via /conference, which doesn't require the
+// agent to be a participant on them.
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
-  // Find the active ACD participant — the queue-side leg we're
-  // replacing with our user.
-  const conv = await apiFetch(`/api/v2/conversations/calls/${convId}`);
-  const target = (conv?.participants || []).find(p =>
-    (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
-  if (!target) throw new Error("No active ACD/agent participant to replace — call may have already disconnected.");
-  await apiFetch(`/api/v2/conversations/${convId}/participants/${target.id}/replace/agent`, {
+  await apiFetch(`/api/v2/conversations/${convId}/assign`, {
     method: "POST",
-    body: { userId: currentUser.id, transferType: "Attended", voicemail: false }
+    body: { userId: currentUser.id }
   });
 }
 
