@@ -4946,28 +4946,33 @@ async function mergeMany(convIds) {
 //   1. SDK reports hasMedia (sessionStarted fired = WebRTC media flowing)
 //   2. Server-side participant state for our user is "connected"
 async function waitForCallReady(convId, timeoutMs = 12000) {
+  const isConnectedState = (s) => {
+    const st = (s || "").toLowerCase();
+    return st === "connected" || st === "held";
+  };
+  const meIsConnected = (parts) => (parts || []).some(p => {
+    const uid = p.userId || p.user?.id;
+    return uid === currentUser?.id && !p.endTime && isConnectedState(p.state);
+  });
   const start = Date.now();
   let lastApiCheck = 0;
   while (Date.now() - start < timeoutMs) {
-    // Fast path: SDK media is up AND our local conversation cache shows connected
+    // Fast path: SDK media is up. The SDK only flips hasMedia after
+    // sessionStarted, which fires once the WebRTC media is flowing —
+    // server-side participant state is connected by then.
     if (sdkSessionLive(convId)) {
       const r = conversations.get(convId);
-      const myPart = (r?.raw?.participants || [])
-        .filter(p => p.userId === currentUser?.id && !p.endTime)
-        .pop();
-      if (myPart && myPart.state === "connected") return true;
+      if (meIsConnected(r?.raw?.participants)) return true;
     }
-    // Backup: every ~800ms hit the API directly to confirm participant state
-    // (handles cases where WS hasn't pushed the connected state update yet)
     const now = Date.now();
     if (now - lastApiCheck > 800) {
       lastApiCheck = now;
       try {
         const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
-        const myPart = (c?.participants || [])
-          .filter(p => p.userId === currentUser?.id && !p.endTime)
-          .pop();
-        if (myPart && myPart.state === "connected") return true;
+        if (meIsConnected(c?.participants)) return true;
+        // If SDK media is up but the API still hasn't transitioned us
+        // to connected after the cache lag, accept SDK as authoritative.
+        if (sdkSessionLive(convId) && Date.now() - start > 4000) return true;
       } catch {}
     }
     await new Promise(res => setTimeout(res, 300));
@@ -5183,57 +5188,69 @@ async function mergeQueueCallsViaSdk(ids) {
       }
     } else {
       // pickupMode === "assign". After ensureAssignReady flips us
-      // on-queue, GC's routing engine often delivers the queued call to
-      // us automatically — adding us as a participant and firing the
-      // SDK propose within ~1-2s. If we beat that with /assign, GC 400s
-      // with 'Targeted User ID is not valid' because we're already
-      // targeted. Wait up to 3s for the propose; accept it if it lands,
-      // fall through to /assign only if it doesn't.
-      const tryAcceptAnchor = async () => {
-        const sess = gcSdkSessions.get(anchorId);
+      // on-queue, GC's routing engine routes ONE of the queued calls to
+      // us — but it might not be the one we chose as anchor. Whichever
+      // call GC picks gets a pendingSession; the other(s) stay queued.
+      // So we wait for a pendingSession on ANY of the selected ids,
+      // then re-anchor to whichever arrives. If after 3s nothing has
+      // arrived, fall through to /assign on our chosen anchor.
+      const tryAcceptId = async (id) => {
+        const sess = gcSdkSessions.get(id);
         const sid = sess?.sessionId;
         if (!sid) return false;
         const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
         if (!accept) return false;
         await accept(sid);
-        stopSdkRingtone(anchorId);
-        seedConvWithRetry(anchorId, 3, 700);
+        stopSdkRingtone(id);
+        seedConvWithRetry(id, 3, 700);
         return true;
       };
 
-      let acceptedViaPending = false;
+      let reAnchoredTo = null;
       if (gcSdkReady) {
         const deadline = Date.now() + 3000;
         while (Date.now() < deadline) {
-          if (sdkHasSession(anchorId) && !sdkSessionLive(anchorId)) {
-            dlog.info("merge", "pendingSession arrived during ready check — switching to acceptPending", { anchorId });
-            try {
-              if (await tryAcceptAnchor()) { acceptedViaPending = true; break; }
-            } catch (e) {
-              dlog.error("merge", "fallback acceptPending failed after race", { anchorId, msg: e.message });
-              throw new Error(`Couldn't accept the alert that arrived during pickup: ${e.message}`);
-            }
-            break;
+          for (const id of ids) {
+            if (sdkHasSession(id) && !sdkSessionLive(id)) { reAnchoredTo = id; break; }
           }
+          if (reAnchoredTo) break;
           await new Promise(r => setTimeout(r, 250));
         }
       }
 
-      if (!acceptedViaPending) {
+      if (reAnchoredTo) {
+        if (reAnchoredTo !== anchorId) {
+          dlog.info("merge", "GC routed a different selected call to us — re-anchoring", { from: anchorId, to: reAnchoredTo });
+          anchorId = reAnchoredTo;
+        } else {
+          dlog.info("merge", "pendingSession arrived for original anchor — accepting", { anchorId });
+        }
+        try {
+          if (!(await tryAcceptId(anchorId))) throw new Error("acceptPendingSession returned false");
+        } catch (e) {
+          dlog.error("merge", "accept of routed pendingSession failed", { anchorId, msg: e.message });
+          throw new Error(`Couldn't accept the alert that arrived during pickup: ${e.message}`);
+        }
+      } else {
         if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
-        dlog.info("merge", "firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
+        dlog.info("merge", "no propose after 3s — firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
         try {
           await assignCallToMe(anchorId);
           dlog.success("merge", "/assign returned ok");
         } catch (e) {
           sdkAutoAcceptIds.delete(anchorId);
-          // Last-ditch: if GC says invalid target and the SDK has a
-          // pendingSession by now, accept it.
-          if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady && sdkHasSession(anchorId) && !sdkSessionLive(anchorId)) {
-            dlog.warn("merge", "/assign 400 — falling back to acceptPendingSession", { anchorId });
-            try {
-              if (!(await tryAcceptAnchor())) throw e;
-            } catch {
+          // Last-ditch: if /assign 400's because we're targeted on
+          // some other selected call, accept that one.
+          if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady) {
+            for (const id of ids) {
+              if (sdkHasSession(id) && !sdkSessionLive(id)) {
+                dlog.warn("merge", "/assign 400 — found pendingSession, accepting it", { originalAnchor: anchorId, accepting: id });
+                try {
+                  if (await tryAcceptId(id)) { anchorId = id; break; }
+                } catch {}
+              }
+            }
+            if (anchorId === undefined) {
               throw new Error(await explainAssignFailure(anchorId, e.message));
             }
           } else {
