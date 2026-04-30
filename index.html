@@ -3451,10 +3451,7 @@ async function doAction(act, row) {
             // Seed the conversation into our Map so My Interactions
             // displays it immediately — WS update with our connected
             // agent participant can lag the SDK sessionStarted event.
-            try {
-              const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
-              if (c?.id) { ingestConversation(c); renderAll(); }
-            } catch (e) { dlog.warn("doAction", "post-accept seed failed", { convId, msg: e.message }); }
+            seedConvWithRetry(convId, 3, 700);
           } else if (!sid) {
             throw new Error("SDK pending session has no id — try refreshing.");
           } else {
@@ -3466,33 +3463,43 @@ async function doAction(act, row) {
         }
         break;
       case "hold": {
-        // Hold is a server-side conversation state, not a WebRTC media
-        // operation — REST PATCH on the agent participant is the
-        // canonical path. The SDK's session.hold() exists but the v6
-        // wrapper around it has been unreliable in practice. REST works
-        // for both WebRTC and non-WebRTC stations, so just use it.
-        if (!myPartId) {
-          // Try to resolve from the conversation directly in case the row
-          // hasn't been seeded yet.
+        // Resolve our participant id. Try the row first; if missing,
+        // fetch the conversation and match on userId across all common
+        // shapes (top-level userId or nested user.id, any purpose).
+        let partId = myPartId;
+        if (!partId) {
           const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
-          const me = (c?.participants || []).filter(p => p.userId === currentUser?.id && !p.endTime).pop();
-          if (!me) throw new Error("No agent participant on this call to hold");
-          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${me.id}`, { method: "PATCH", body: { held: !row.held } });
-        } else {
-          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: !row.held } });
+          const candidates = (c?.participants || []).filter(p => {
+            const uid = p.userId || p.user?.id;
+            return uid === currentUser?.id && !p.endTime;
+          });
+          partId = candidates.pop()?.id;
+          if (!partId) {
+            dlog.error("doAction", "hold: no participant found", { convId, participants: (c?.participants || []).map(p => ({id: p.id, purpose: p.purpose, userId: p.userId || p.user?.id, state: p.state, endTime: p.endTime})) });
+            throw new Error("No agent participant on this call to hold");
+          }
         }
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}`, { method: "PATCH", body: { held: !row.held } });
         const s = gcSdkSessions.get(convId); if (s) s.hold = !row.held;
         break;
       }
       case "mute": {
-        // v6 SDK has no setMute — mute/unmute on session object.
-        const sess = sdkGetSession(convId);
-        if (gcSdkReady && sess && typeof sess.mute === "function") {
+        // v6 SDK exposes setAudioMute({sessionId, mute}) at the top
+        // level. It dispatches to the session manager which actually
+        // toggles the WebRTC sender's enabled flag — that's what
+        // physically mutes the mic. The session.mute() method we tried
+        // before is a Jingle-internal call that doesn't toggle the mic.
+        const sessRec = gcSdkSessions.get(convId);
+        const sid = sessRec?.sessionId;
+        if (gcSdkReady && sid && typeof gcSdk.setAudioMute === "function") {
           const cur = sdkSessionMuted(convId);
-          if (cur) await sess.unmute(); else await sess.mute();
-          const s = gcSdkSessions.get(convId); if (s) s.mute = !cur;
+          dlog.info("doAction", "setAudioMute", { sid, mute: !cur });
+          await gcSdk.setAudioMute({ sessionId: sid, mute: !cur });
+          if (sessRec) sessRec.mute = !cur;
           renderInlineCallStrip();
         } else {
+          // REST fallback only flips the muted flag server-side without
+          // controlling the mic — mostly only useful for non-WebRTC.
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { muted: !row.muted } });
         }
         break;
@@ -5098,10 +5105,7 @@ async function mergeQueueCallsViaSdk(ids) {
         if (!sid) throw new Error("SDK pending session has no id");
         await accept(sid);
         stopSdkRingtone(anchorId);
-        try {
-          const c = await apiFetch(`/api/v2/conversations/calls/${anchorId}`);
-          if (c?.id) { ingestConversation(c); renderAll(); }
-        } catch {}
+        seedConvWithRetry(anchorId, 3, 700);
       } catch (e) {
         dlog.error("merge", "accept of existing pendingSession failed", { anchorId, sid, msg: e.message });
         throw new Error(`Couldn't accept the alert that's already ringing for this call: ${e.message}`);
@@ -6117,11 +6121,10 @@ function wireSdkEvents() {
     stopSdkRingtone(cid);
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
-    // Make sure My Interactions reflects the new active call within ~1s,
-    // even if the WS conversation update lags.
-    apiFetch(`/api/v2/conversations/calls/${cid}`).then(c => {
-      if (c?.id) { ingestConversation(c); renderAll(); }
-    }).catch(() => {});
+    // Make sure My Interactions reflects the new active call. WS update
+    // can lag and the API might also briefly return the conversation
+    // without our agent participant attached — retry up to 3 times.
+    seedConvWithRetry(cid, 3, 700);
   });
   gcSdk.on("sessionEnded", (sess, reason) => {
     dlog.info("gcSdk-evt", "sessionEnded", { conversationId: sess?.conversationId, sessionId: sess?.id, reason: reason?.condition || reason });
@@ -6240,6 +6243,31 @@ setInterval(() => {
     }
   }
 }, 3000);
+
+// Seed a conversation into the dashboard's conversations Map. Retries
+// because GC's API can briefly return the conversation without our
+// agent participant attached when called within ~1s of the SDK accept.
+// Stops as soon as ingest sees a hasMe=true on this conv.
+async function seedConvWithRetry(convId, attempts = 3, gapMs = 700) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+      if (c?.id) {
+        ingestConversation(c);
+        renderAll();
+        const r = conversations.get(convId);
+        if (r?.hasMe) {
+          dlog.info("seed", `conversation seeded with hasMe=true on attempt ${i + 1}`, { convId });
+          return;
+        }
+      }
+    } catch (e) {
+      dlog.warn("seed", `seed attempt ${i + 1} failed`, { convId, msg: e.message });
+    }
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, gapMs));
+  }
+  dlog.warn("seed", "conversation seed exhausted retries without hasMe", { convId });
+}
 
 // Reconcile SDK session state with WS conversation update. Called after
 // every ingestConversation. If the SDK has a pendingSession for this
