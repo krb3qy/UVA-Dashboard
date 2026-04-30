@@ -5911,6 +5911,7 @@ function wireSdkEvents() {
     const cur = gcSdkSessions.get(cid) || {};
     gcSdkSessions.set(cid, { ...cur, sessionId: s.sessionId, pending: true, autoAnswer: !!s.autoAnswer });
     renderCallWidgets();
+    try { renderInlineCallStrip(); } catch {}
     // If something in the app explicitly intended to pick this call up
     // (e.g. Conference button → mergeQueueCallsViaSdk), honor that intent
     // by auto-accepting now. acdAutoAnswer:false on the user means the
@@ -5937,12 +5938,32 @@ function wireSdkEvents() {
     const cur = gcSdkSessions.get(cid) || {};
     gcSdkSessions.set(cid, { ...cur, sessionId: sess.id || sess.sessionId, pending: false, hasMedia: true });
     renderCallWidgets();
+    try { renderInlineCallStrip(); } catch {}
   });
   gcSdk.on("sessionEnded", (sess, reason) => {
     dlog.info("gcSdk-evt", "sessionEnded", { conversationId: sess?.conversationId, sessionId: sess?.id, reason: reason?.condition || reason });
     const cid = sess?.conversationId;
-    if (cid) gcSdkSessions.delete(cid);
+    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); }
     renderCallWidgets();
+    try { renderInlineCallStrip(); } catch {}
+  });
+  // Fires when a pending session is cancelled before it could become a
+  // real session — most commonly when the user lets a queue alert ring
+  // out without answering. Without this handler the session record
+  // lingers in gcSdkSessions forever and the inline call strip never
+  // clears.
+  gcSdk.on("cancelPendingSession", (s) => {
+    const cid = s?.conversationId || s;
+    dlog.info("gcSdk-evt", "cancelPendingSession", { conversationId: cid });
+    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); }
+    renderCallWidgets();
+    try { renderInlineCallStrip(); } catch {}
+  });
+  // Fires when the SDK has accepted the pending session — confirms our
+  // explicit auto-accept landed.
+  gcSdk.on?.("handledPendingSession", (s) => {
+    const cid = s?.conversationId || s;
+    dlog.info("gcSdk-evt", "handledPendingSession", { conversationId: cid });
   });
   gcSdk.on("station", (info) => {
     dlog.info("gcSdk-evt", "station", { id: info?.id, name: info?.name, type: info?.type, status: info?.status });
