@@ -1333,15 +1333,15 @@ function wireDevPanel() {
     devPaused = !devPaused; e.target.textContent = devPaused ? "Resume" : "Pause";
     renderDevLogFull();
   };
-  document.getElementById("devCopyBtn").onclick = async () => {
+  document.getElementById("devCopyBtn").onclick = async (ev) => {
+    const btn = ev.currentTarget;
     const dump = devLog.map(e => `${fmtTs(e.t)} [${e.level}] [${e.area}] ${e.msg}${e.data ? " " + e.data : ""}`).join("\n");
     try { await navigator.clipboard.writeText(dump); } catch {
-      // Fallback: stuff into a textarea, select, copy
       const ta = document.createElement("textarea");
       ta.value = dump; document.body.appendChild(ta); ta.select();
       try { document.execCommand("copy"); } finally { ta.remove(); }
     }
-    e.target.textContent = "Copied"; setTimeout(() => e.target.textContent = "Copy", 1200);
+    btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1200);
   };
   document.getElementById("devFilter").oninput = renderDevLogFull;
   document.getElementById("devLevelFilter").onchange = renderDevLogFull;
@@ -2089,16 +2089,24 @@ async function resolveUser(id) {
 }
 async function fetchCurrentUser() {
   const me = await apiFetch("/api/v2/users/me?expand=presence,routingStatus,station");
+  // Dump the full station object so we can see why stationType comes back
+  // empty for some users — helps diagnose station-registration issues.
+  try { dlog.info("user", "raw me.station", me.station || null); } catch {}
   const station = me.station?.associatedStation || me.station?.effectiveStation || me.station?.defaultStation;
-  // GC's station object has the human-readable identifier under
-  // providerInfo.name (e.g. the WebRTC SIP URI); a top-level .name field
-  // exists only for some physical-station shapes. Fall back through both
-  // so WebRTC users don't show 'Station: —'.
   const stationName = station?.providerInfo?.name || station?.name || (station?.id ? station.id.slice(0, 8) : "");
+  // Detect WebRTC even when station.type is empty: GC's WebRTC softphone
+  // stations have an orgspan.com JID with `+` separator (e.g.
+  // "abc123+myorg.orgspan.com"). associatedStation.type is the official
+  // signal but is sometimes blank when no client is currently registered.
+  const looksWebrtc = (s) => /\+[^@]+\.orgspan\.com/.test(s || "");
+  let stationType = station?.type || "";
+  if (!stationType && looksWebrtc(stationName)) stationType = "inin_webrtc_softphone";
   currentUser = {
     id: me.id, name: me.name,
     station: stationName,
-    stationType: station?.type || ""    // inin_webrtc_softphone, inin_physical, inin_remote, etc.
+    stationType,
+    stationId: station?.id || null,
+    stationRaw: station || null
   };
   const rawP = me.presence?.presenceDefinition?.systemPresence || "";
   usersById.set(me.id, {
@@ -5805,11 +5813,17 @@ async function initWebrtcSdk() {
     }
   } catch (e) { dlog.warn("gcSdk", "mic perm probe failed", { msg: e.message }); }
 
+  // Skip ONLY if we can confirm the station is a deskphone or remote phone.
+  // If stationType is empty (common when no client is currently registered),
+  // try anyway — registering the dashboard SDK as a client may be exactly
+  // what the user needs to receive calls.
   const t = (currentUser.stationType || "").toLowerCase();
-  if (!t.includes("webrtc")) {
-    dlog.warn("gcSdk", "stationType is not WebRTC — SDK init skipped", { stationType: currentUser.stationType });
+  const isDefinitelyNotWebrtc = t && !t.includes("webrtc") && !t.includes("softphone");
+  if (isDefinitelyNotWebrtc) {
+    dlog.warn("gcSdk", "stationType is non-WebRTC — SDK init skipped", { stationType: currentUser.stationType });
     return;
   }
+  if (!t) dlog.warn("gcSdk", "stationType empty — attempting SDK init anyway (may register as a station client)", { station: currentUser.station });
   const ns = window.GenesysCloudWebrtcSdk;
   const Ctor = (ns && ns.GenesysCloudWebrtcSdk) || ns || window.genesysCloudWebrtcSdk;
   dlog.info("gcSdk", "bundle resolution", { hasNs: !!ns, ctorIs: typeof Ctor, keys: ns ? Object.keys(ns).slice(0, 10) : null });
