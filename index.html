@@ -3454,7 +3454,22 @@ async function doAction(act, row) {
         break;
       case "disconnect":
         if (gcSdkReady && sdkHasSession(convId)) {
-          await gcSdk.endSession({ conversationId: convId, reason: "success" });
+          try {
+            await gcSdk.endSession({ conversationId: convId, reason: "success" });
+          } catch (e) {
+            // SDK reports "Unable to find session" when our local state
+            // lags behind a server-side teardown (alert timed out, etc.).
+            // Treat as success: prune our state and re-render so the
+            // stale call strip clears.
+            if (/find session|no.*session|not.*found/i.test(e.message || "")) {
+              dlog.warn("doAction", "endSession: SDK has no record, cleaning up locally", { convId, msg: e.message });
+              gcSdkSessions.delete(convId);
+              sdkAutoAcceptIds.delete(convId);
+              try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
+              break;
+            }
+            throw e;
+          }
         } else {
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
         }
@@ -5909,7 +5924,7 @@ function wireSdkEvents() {
     dlog.success("gcSdk-evt", "pendingSession", { conversationId: s?.conversationId, sessionId: s?.sessionId, autoAnswer: s?.autoAnswer, fromUserId: s?.fromUserId, fromJid: s?.fromJid });
     const cid = s?.conversationId; if (!cid) return;
     const cur = gcSdkSessions.get(cid) || {};
-    gcSdkSessions.set(cid, { ...cur, sessionId: s.sessionId, pending: true, autoAnswer: !!s.autoAnswer });
+    gcSdkSessions.set(cid, { ...cur, sessionId: s.sessionId, pending: true, autoAnswer: !!s.autoAnswer, firstSeenAt: Date.now() });
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
     // If something in the app explicitly intended to pick this call up
@@ -5980,7 +5995,66 @@ function wireSdkEvents() {
     const lvl = level === "error" ? "error" : level === "warn" ? "warn" : "debug";
     dlog[lvl]("gcSdk-trace", String(msg).slice(0, 200));
   });
+
+  // Catch-all event sniffer: log every event we don't already handle so
+  // we can identify the actual cancellation/rejection event names in v6
+  // (cancelPendingSession may be wrong; could be sessionCancelled,
+  // pendingSessionCancelled, rejected, etc.).
+  const knownEvents = new Set([
+    "pendingSession", "sessionStarted", "sessionEnded", "cancelPendingSession",
+    "handledPendingSession", "station", "error", "connected", "disconnected",
+    "ready", "trace"
+  ]);
+  try {
+    // node EventEmitter exposes eventNames(); browser EventTarget doesn't.
+    // The SDK is built on EventEmitter so this should work.
+    const origOn = gcSdk.on.bind(gcSdk);
+    // Wrap .on so any handler we add later is still chainable, but ALSO
+    // patch through to log unhandled events. We do this by polling for
+    // any new event names every 5s and attaching a passive listener.
+    const sniffed = new Set([...knownEvents]);
+    setInterval(() => {
+      try {
+        const names = typeof gcSdk.eventNames === "function" ? gcSdk.eventNames() : [];
+        for (const n of names) {
+          if (sniffed.has(n)) continue;
+          sniffed.add(n);
+          dlog.info("gcSdk-sniff", `attaching to new event: ${n}`);
+          gcSdk.on(n, (...args) => {
+            const summary = args.length === 1 ? args[0] : args;
+            const out = {};
+            try {
+              if (summary && typeof summary === "object") {
+                out.conversationId = summary.conversationId;
+                out.sessionId = summary.sessionId || summary.id;
+                out.reason = summary.reason || summary.condition;
+              }
+            } catch {}
+            dlog.info("gcSdk-evt-other", n, out);
+          });
+        }
+      } catch {}
+    }, 5000);
+  } catch (e) { dlog.warn("gcSdk", "event sniffer setup failed", { msg: e.message }); }
 }
+
+// Sweeper: prune pendingSession entries that never became real sessions
+// and never got an explicit cancellation event. Defensive against SDK
+// event-name drift. Runs every 15s.
+setInterval(() => {
+  if (!gcSdkReady) return;
+  const now = Date.now();
+  for (const [cid, s] of gcSdkSessions.entries()) {
+    if (!s.pending || s.hasMedia) continue;
+    if (!s.firstSeenAt) { s.firstSeenAt = now; continue; }
+    if (now - s.firstSeenAt > 45000) {
+      dlog.warn("gcSdk-sweep", "pruning stale pendingSession (>45s without start/cancel)", { cid });
+      gcSdkSessions.delete(cid);
+      sdkAutoAcceptIds.delete(cid);
+      try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
+    }
+  }
+}, 15000);
 
 function showSdkUnavailableBanner(reason) {
   try {
