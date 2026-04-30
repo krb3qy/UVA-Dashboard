@@ -1427,6 +1427,11 @@ let gcSdk = null;
 let gcSdkReady = false;
 let gcSdkError = null;
 const gcSdkSessions = new Map();   // convId → {sessionId, hasMedia, mute, hold, autoAnswer, pending}
+// convIds we expect to auto-accept when the SDK's pendingSession event
+// fires for them — populated by flows like merge that explicitly pick up
+// a call. Distinct from autoConnectSessions:true which only auto-accepts
+// when the GC server flags the alert as autoAnswer (acdAutoAnswer on user).
+const sdkAutoAcceptIds = new Set();
 const sdkHasSession   = (cid) => gcSdkSessions.has(cid);
 const sdkSessionLive  = (cid) => !!gcSdkSessions.get(cid)?.hasMedia;
 const sdkSessionMuted = (cid) => !!gcSdkSessions.get(cid)?.mute;
@@ -3411,9 +3416,15 @@ async function doAction(act, row) {
     switch (act) {
       case "answer":
         // SDK path: if we have a pendingSession (not yet auto-accepted)
-        // call acceptSession; otherwise PATCH state=connected (legacy).
+        // call acceptPendingSession (or acceptSession on older builds);
+        // otherwise PATCH state=connected (legacy / non-WebRTC stations).
         if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
-          await gcSdk.acceptSession({ conversationId: convId, audioElement: el("gcSdkAudio") });
+          const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
+          if (accept) {
+            await accept({ conversationId: convId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+          } else {
+            throw new Error("SDK has no acceptPendingSession/acceptSession method.");
+          }
         } else {
           if (!myPartId) throw new Error("No participant to answer on");
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "connected" } });
@@ -3449,17 +3460,23 @@ async function doAction(act, row) {
         }
         break;
       case "pickup": {
-        // Unified pickup — uses the same /replace/agent Attended path as
-        // the merge flow. SDK auto-accepts the resulting pendingSession
-        // event when the SDK is up; otherwise the call rings the user's
-        // station (GC client tab) the legacy way.
-        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
-          await gcSdk.acceptSession({ conversationId: convId, audioElement: el("gcSdkAudio") });
-          break;
+        // Unified pickup. If the SDK already has a pendingSession for this
+        // conv (the queue call already routed to us and is ringing), accept
+        // it. Otherwise call /assign — and pre-mark the conv for auto-accept
+        // so the pendingSession that lands a few hundred ms later gets
+        // picked up automatically without a second click.
+        if (gcSdkReady && sdkHasSession(convId)) {
+          const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
+          if (accept) {
+            await accept({ conversationId: convId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+            break;
+          }
         }
         const why = assignEligibilityError(convId);
         if (why) throw new Error(why);
-        await assignCallToMe(convId);
+        if (gcSdkReady) sdkAutoAcceptIds.add(convId);
+        try { await assignCallToMe(convId); }
+        catch (e) { sdkAutoAcceptIds.delete(convId); throw e; }
         break;
       }
       case "listen":
@@ -4944,9 +4961,13 @@ async function mergeQueueCallsViaSdk(ids) {
     if (!(await isCallStillActive(anchorId))) {
       throw new Error("Anchor queue call hung up before pickup.");
     }
-    dlog.info("merge", "firing /assign on anchor", { anchorId });
+    // Mark this call for auto-accept BEFORE /assign — the pendingSession
+    // event can land within tens of ms of the API response.
+    if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
+    dlog.info("merge", "firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
     try { await assignCallToMe(anchorId); }
     catch (e) {
+      sdkAutoAcceptIds.delete(anchorId);
       dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
       throw new Error(await explainAssignFailure(anchorId, e.message));
     }
@@ -5890,6 +5911,24 @@ function wireSdkEvents() {
     const cur = gcSdkSessions.get(cid) || {};
     gcSdkSessions.set(cid, { ...cur, sessionId: s.sessionId, pending: true, autoAnswer: !!s.autoAnswer });
     renderCallWidgets();
+    // If something in the app explicitly intended to pick this call up
+    // (e.g. Conference button → mergeQueueCallsViaSdk), honor that intent
+    // by auto-accepting now. acdAutoAnswer:false on the user means the
+    // SDK's autoConnectSessions:true won't accept this on its own.
+    if (sdkAutoAcceptIds.has(cid)) {
+      sdkAutoAcceptIds.delete(cid);
+      try {
+        const acceptArgs = { conversationId: cid, autoAnswer: true };
+        const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.sessionManager?.acceptPendingSession?.bind(gcSdk.sessionManager);
+        if (accept) {
+          dlog.info("gcSdk", "auto-accepting pendingSession (user-initiated pickup)", { cid });
+          Promise.resolve(accept(acceptArgs)).catch(e =>
+            dlog.error("gcSdk", "acceptPendingSession failed", { cid, msg: e.message }));
+        } else {
+          dlog.warn("gcSdk", "no acceptPendingSession method on SDK", { cid, sdkKeys: Object.keys(gcSdk).slice(0, 30) });
+        }
+      } catch (e) { dlog.error("gcSdk", "acceptPendingSession threw", { cid, msg: e.message }); }
+    }
   });
   gcSdk.on("sessionStarted", (sess) => {
     dlog.success("gcSdk-evt", "sessionStarted", { conversationId: sess?.conversationId, sessionId: sess?.id || sess?.sessionId, sessionType: sess?.sessionType });
