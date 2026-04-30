@@ -4833,6 +4833,23 @@ async function waitForCallReady(convId, timeoutMs = 12000) {
   return false;
 }
 
+// Poll user's routingStatus until it lands in one of the desired values
+// or the timeout expires. Returns true on hit, false on timeout.
+async function waitForRoutingStatus(targets, timeoutMs) {
+  const want = new Set(targets);
+  const deadline = Date.now() + timeoutMs;
+  let landed = false;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 250));
+    try {
+      const u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
+      if (want.has(u?.routingStatus?.status)) { landed = true; break; }
+    } catch {}
+  }
+  dlog[landed ? "success" : "warn"]("merge", landed ? `routing status reached ${[...want].join("/")}` : `routing status didn't hit ${[...want].join("/")} in ${timeoutMs}ms`);
+  return landed;
+}
+
 // Pre-flight diagnostic for /assign. Reads fresh user state, fixes
 // recoverable conditions (NOT_RESPONDING / OFF_QUEUE → IDLE), and
 // throws a specific actionable error for non-recoverable ones (no
@@ -4865,26 +4882,40 @@ async function ensureAssignReady(convId) {
   if (rs === "INTERACTING") {
     throw new Error("You're INTERACTING (already on a call). Select that call as part of the merge or end it first.");
   }
-  if (rs === "NOT_RESPONDING" || rs === "OFF_QUEUE" || rs === "COMMUNICATING") {
-    dlog.warn("merge", `routing status is ${rs} — resetting to IDLE`);
+  if (rs === "NOT_RESPONDING") {
+    // /routingstatus PUT only accepts the IDLE transition from NOT_RESPONDING.
+    dlog.warn("merge", "routing status NOT_RESPONDING — resetting to IDLE");
     try {
       await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
         method: "PUT", body: { status: "IDLE" }
       });
     } catch (e) {
       dlog.error("merge", "routingStatus reset failed", { from: rs, msg: e.message });
-      throw new Error(`Couldn't put you back on queue (was ${rs}). Click On Queue in your GC client and retry. (${e.message})`);
+      throw new Error(`Couldn't reset routing status: ${e.message}`);
     }
-    const flipDeadline = Date.now() + 5000;
-    let landed = false;
-    while (Date.now() < flipDeadline) {
-      await new Promise(r => setTimeout(r, 250));
-      try {
-        const u2 = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
-        if (u2?.routingStatus?.status === "IDLE") { landed = true; break; }
-      } catch {}
+    await waitForRoutingStatus(["IDLE"], 5000);
+  } else if (rs === "OFF_QUEUE" || rs === "COMMUNICATING") {
+    // OFF_QUEUE / COMMUNICATING aren't recoverable via PUT /routingstatus
+    // (GC: "Can only reset status from NOT_RESPONDING"). Switch the user's
+    // PRESENCE to the org's "On Queue" definition — that flips routing
+    // status to IDLE server-side.
+    dlog.warn("merge", `routing status is ${rs} — switching presence to On Queue`);
+    try {
+      const r = await apiFetch(`/api/v2/presencedefinitions?pageSize=100`);
+      const onQ = (r?.entities || []).find(d => {
+        const sp = (d.systemPresence || "").toUpperCase().replace(/[\s_]/g, "");
+        return sp === "ONQUEUE";
+      });
+      if (!onQ) throw new Error("No 'On Queue' presence definition in this org");
+      await apiFetch(`/api/v2/users/${currentUser.id}/presences/purecloud`, {
+        method: "PATCH",
+        body: { presenceDefinition: { id: onQ.id } }
+      });
+    } catch (e) {
+      dlog.error("merge", "presence flip to On Queue failed", { from: rs, msg: e.message });
+      throw new Error(`Couldn't put you back on queue (was ${rs}): ${e.message}. Click On Queue in your GC client and retry.`);
     }
-    dlog[landed ? "success" : "warn"]("merge", landed ? "routing status flipped to IDLE" : "routing status didn't flip in 5s");
+    await waitForRoutingStatus(["IDLE", "INTERACTING", "COMMUNICATING"], 5000);
   }
 
   // 4. Queue-membership check. /assign for an ACD queue call requires
@@ -4952,46 +4983,70 @@ async function mergeQueueCallsViaSdk(ids) {
     if (why) throw new Error(why);
   }
 
-  // 3. Pick anchor.
-  //    Prefer an already-connected call I'm on (even if not in the
-  //    selection) — saves the extra /assign roundtrip and means I never
-  //    need to be picked up.
-  //    Otherwise pick the longest-waiting selected queue call as the
-  //    anchor: more time invested = less likely to hang up mid-merge.
-  let anchorId = [...conversations.values()]
-    .find(r => r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held"))?.id;
-  dlog.info("merge", "anchor selection", { existingConnectedAnchor: anchorId || null });
+  // 3. Pick anchor. Preference order:
+  //    A. Already-connected/held call we're on — no pickup needed.
+  //    B. Selected call the SDK is alerting us on — accept that
+  //       pendingSession directly. Cleaner than /assign and works even
+  //       when /assign would 400 with "Targeted User ID is not valid"
+  //       (which it does when GC has already targeted us).
+  //    C. Longest-waiting selected queue call — pick up via /assign.
+  let anchorId = null;
+  let pickupMode = null; // "none" | "acceptPending" | "assign"
 
-  let anchorWasAssignedHere = false;
+  // A. Already on a call?
+  const liveAnchor = [...conversations.values()]
+    .find(r => r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held"));
+  if (liveAnchor) {
+    anchorId = liveAnchor.id;
+    pickupMode = "none";
+  }
+  // B. SDK already alerting us on one of the selected ids?
+  if (!anchorId && gcSdkReady) {
+    for (const id of ids) {
+      if (sdkHasSession(id) && !sdkSessionLive(id)) { anchorId = id; pickupMode = "acceptPending"; break; }
+    }
+  }
+  // C. Pick the longest-waiting queue call from the selection.
   if (!anchorId) {
-    // Pick the longest-waiting queue call from the selection
     const queueCalls = ids
       .map(id => conversations.get(id))
       .filter(r => r && !r.hasMe && !r.disconnected)
-      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0)); // oldest first
-    const anchor = queueCalls[0];
-    if (!anchor) throw new Error("No pickup-able queue call in the selection.");
-    anchorId = anchor.id;
+      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+    if (!queueCalls.length) throw new Error("No pickup-able queue call in the selection.");
+    anchorId = queueCalls[0].id;
+    pickupMode = "assign";
+  }
+  dlog.info("merge", "anchor selection", { anchorId, pickupMode });
 
-    // Pre-flight diagnostic: GC's /assign returns a vague "Targeted User
-    // ID is not valid" 400 for several distinct reasons. Auto-fix what
-    // we can; surface clear errors for the rest.
+  let anchorWasAssignedHere = false;
+  if (pickupMode !== "none") {
     await ensureAssignReady(anchorId);
-
     if (!(await isCallStillActive(anchorId))) {
       throw new Error("Anchor queue call hung up before pickup.");
     }
-    // Mark this call for auto-accept BEFORE /assign — the pendingSession
-    // event can land within tens of ms of the API response.
-    if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
-    dlog.info("merge", "firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
-    try { await assignCallToMe(anchorId); }
-    catch (e) {
-      sdkAutoAcceptIds.delete(anchorId);
-      dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
-      throw new Error(await explainAssignFailure(anchorId, e.message));
+    if (pickupMode === "acceptPending") {
+      dlog.info("merge", "anchor has pendingSession — accepting directly", { anchorId });
+      try {
+        const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
+        if (!accept) throw new Error("SDK has no acceptPendingSession method");
+        await accept({ conversationId: anchorId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+        stopSdkRingtone(anchorId);
+      } catch (e) {
+        dlog.error("merge", "accept of existing pendingSession failed", { anchorId, msg: e.message });
+        throw new Error(`Couldn't accept the alert that's already ringing for this call: ${e.message}`);
+      }
+    } else {
+      // pickupMode === "assign"
+      if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
+      dlog.info("merge", "firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
+      try { await assignCallToMe(anchorId); }
+      catch (e) {
+        sdkAutoAcceptIds.delete(anchorId);
+        dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
+        throw new Error(await explainAssignFailure(anchorId, e.message));
+      }
+      dlog.success("merge", "/assign returned ok");
     }
-    dlog.success("merge", "/assign returned ok");
     anchorWasAssignedHere = true;
   }
 
@@ -5978,9 +6033,24 @@ function wireSdkEvents() {
   // lingers in gcSdkSessions forever and the inline call strip never
   // clears.
   gcSdk.on("cancelPendingSession", (s) => {
-    const cid = s?.conversationId || s;
-    dlog.info("gcSdk-evt", "cancelPendingSession", { conversationId: cid });
-    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); stopSdkRingtone(cid); }
+    // v6 SDK fires this event with the SESSION ID (or just a string ID),
+    // not the conversationId. Resolve back to convId by walking our
+    // session map.
+    const param = (s && (s.conversationId || s.sessionId)) || s;
+    const paramStr = String(param ?? "");
+    let matchedCid = null;
+    if (gcSdkSessions.has(paramStr)) matchedCid = paramStr;
+    else {
+      for (const [cid, info] of gcSdkSessions.entries()) {
+        if (String(info.sessionId) === paramStr) { matchedCid = cid; break; }
+      }
+    }
+    dlog.info("gcSdk-evt", "cancelPendingSession", { param: paramStr, matchedCid });
+    if (matchedCid) {
+      gcSdkSessions.delete(matchedCid);
+      sdkAutoAcceptIds.delete(matchedCid);
+      stopSdkRingtone(matchedCid);
+    }
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
   });
