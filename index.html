@@ -5174,12 +5174,48 @@ async function mergeQueueCallsViaSdk(ids) {
   //    /assigns — pendingSession events arrive within tens of ms.
   if (gcSdkReady) for (const id of ids) sdkAutoAcceptIds.add(id);
 
-  // 5. Sequential /assign loop. Skip calls already ours; tolerate
-  //    per-call failures (collected, not aborted) — IW-Merge does the
-  //    same. Mirrors C:\Users\krb3qy\Documents\projects\IW-Merge-Widget
-  //    \index.html lines 1337-1347 verbatim.
+  // 5. Sequential /assign loop. Before each /assign, HOLD any active
+  //    calls Alex is already on — GC's routing engine refuses to deliver
+  //    a new call to an INTERACTING agent (returns 'Targeted User ID is
+  //    not valid' 400) unless his prior call(s) are held. With prior
+  //    calls held, the server treats him as having a free routing slot
+  //    and the next /assign succeeds. After all /assigns complete, the
+  //    /conference call merges them together (and the customer-side
+  //    behavior is the same regardless of held state).
   const assignFailures = [];
+  const heldByMerge = new Set(); // ids we put on hold during this merge
+
+  const holdActiveCalls = async () => {
+    // Hold every active call Alex is on that isn't already held.
+    const targets = [...conversations.values()].filter(r =>
+      r.hasMe && !r.disconnected && !r.held);
+    for (const r of targets) {
+      try {
+        await holdMyCall(r.id, true);
+        heldByMerge.add(r.id);
+        const s = gcSdkSessions.get(r.id); if (s) s.hold = true;
+        if (r) r.held = true;
+      } catch (e) { dlog.warn("merge", `hold prior call failed`, { id: r.id, msg: e.message }); }
+    }
+    if (targets.length) dlog.info("merge", `held ${targets.length} prior call(s) before next /assign`);
+  };
+
+  const tryAcceptPending = async (id) => {
+    const sess = gcSdkSessions.get(id);
+    const sid = sess?.sessionId;
+    if (!sid) return false;
+    const accept = gcSdk.acceptPendingSession?.bind(gcSdk);
+    if (!accept) return false;
+    await accept(sid);
+    stopSdkRingtone(id);
+    sdkAutoAcceptIds.delete(id);
+    seedConvWithRetry(id, 3, 700);
+    return true;
+  };
+
   for (const id of ids) {
+    // Refresh local state in case WS hasn't caught up.
+    try { await seedMyInteractions(); } catch {}
     const r = conversations.get(id);
     if (r?.hasMe) {
       dlog.info("merge", "already on this call — skipping /assign", { id });
@@ -5189,45 +5225,25 @@ async function mergeQueueCallsViaSdk(ids) {
       assignFailures.push({ id, err: "call hung up before assign" });
       continue;
     }
-    // If the SDK already has a pendingSession for this call (e.g. ensureAssignReady's
-    // presence flip caused GC to route this call to us), accept it
-    // directly — /assign would 400 with 'Targeted User ID is not valid'.
+    // SDK might already have a pendingSession (race: GC routed this
+    // call to us during a prior step). Accept it.
     if (gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
-      const sess = gcSdkSessions.get(id);
-      const sid = sess?.sessionId;
-      dlog.info("merge", "pendingSession already exists — accepting", { id, sid });
-      try {
-        const accept = gcSdk.acceptPendingSession?.bind(gcSdk);
-        if (accept && sid) {
-          await accept(sid);
-          stopSdkRingtone(id);
-          sdkAutoAcceptIds.delete(id);
-          seedConvWithRetry(id, 3, 700);
-        }
-      } catch (e) {
-        dlog.warn("merge", "acceptPending failed mid-loop", { id, msg: e.message });
-        assignFailures.push({ id, err: e.message });
-      }
+      dlog.info("merge", "pendingSession already exists — accepting", { id });
+      try { await tryAcceptPending(id); }
+      catch (e) { assignFailures.push({ id, err: e.message }); }
       continue;
     }
+    // Free up Alex's routing slot before the assign.
+    await holdActiveCalls();
+    // Brief settle — server needs a moment to register the hold.
+    await new Promise(r => setTimeout(r, 300));
     dlog.info("merge", "POST /assign", { id });
     try { await assignCallToMe(id); }
     catch (e) {
       sdkAutoAcceptIds.delete(id);
-      // If GC says invalid.id and we're now alerting on this call,
-      // accept the pending session (race: GC routed it to us before
-      // /assign).
       if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
-        const sess = gcSdkSessions.get(id);
-        const sid = sess?.sessionId;
         try {
-          const accept = gcSdk.acceptPendingSession?.bind(gcSdk);
-          if (accept && sid) {
-            await accept(sid);
-            stopSdkRingtone(id);
-            seedConvWithRetry(id, 3, 700);
-            continue;
-          }
+          if (await tryAcceptPending(id)) continue;
         } catch (e2) {
           assignFailures.push({ id, err: `assign 400 + acceptPending failed: ${e2.message}` });
           continue;
