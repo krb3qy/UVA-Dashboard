@@ -3422,18 +3422,20 @@ async function doAction(act, row) {
     switch (act) {
       case "answer":
         // SDK path: if we have a pendingSession (not yet auto-accepted)
-        // call acceptPendingSession with sessionId (SDK v6 keys pending
-        // sessions by propose id); fall back to PATCH state=connected
-        // for legacy / non-WebRTC stations.
+        // call acceptPendingSession with the propose-id sessionId STRING
+        // (SDK v6 internally does pendingSessions[t] — needs a string,
+        // not an object). audioElement is wired via SDK defaults.
         if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
           const sess = gcSdkSessions.get(convId);
           const sid = sess?.sessionId;
           const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-          if (accept) {
-            await accept({ sessionId: sid, conversationId: convId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+          if (accept && sid) {
+            await accept(sid);
             stopSdkRingtone(convId);
+          } else if (!sid) {
+            throw new Error("SDK pending session has no id — try refreshing.");
           } else {
-            throw new Error("SDK has no acceptPendingSession/acceptSession method.");
+            throw new Error("SDK has no acceptPendingSession method.");
           }
         } else {
           if (!myPartId) throw new Error("No participant to answer on");
@@ -3487,8 +3489,8 @@ async function doAction(act, row) {
           const sess = gcSdkSessions.get(convId);
           const sid = sess?.sessionId;
           const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-          if (accept) {
-            await accept({ sessionId: sid, conversationId: convId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+          if (accept && sid) {
+            await accept(sid);
             stopSdkRingtone(convId);
             break;
           }
@@ -5032,23 +5034,44 @@ async function mergeQueueCallsViaSdk(ids) {
       try {
         const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
         if (!accept) throw new Error("SDK has no acceptPendingSession method");
-        await accept({ sessionId: sid, conversationId: anchorId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+        if (!sid) throw new Error("SDK pending session has no id");
+        await accept(sid);
         stopSdkRingtone(anchorId);
       } catch (e) {
         dlog.error("merge", "accept of existing pendingSession failed", { anchorId, sid, msg: e.message });
         throw new Error(`Couldn't accept the alert that's already ringing for this call: ${e.message}`);
       }
     } else {
-      // pickupMode === "assign"
-      if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
-      dlog.info("merge", "firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
-      try { await assignCallToMe(anchorId); }
-      catch (e) {
-        sdkAutoAcceptIds.delete(anchorId);
-        dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
-        throw new Error(await explainAssignFailure(anchorId, e.message));
+      // pickupMode === "assign". Re-check: a pendingSession may have
+      // arrived while ensureAssignReady was running (e.g. presence flip
+      // from OFF_QUEUE → On Queue causes GC to route a queued call to us
+      // immediately, firing the propose). If so, the call is already
+      // alerting us and /assign would 400 with "Targeted User ID is not
+      // valid" — accept the pendingSession instead.
+      if (gcSdkReady && sdkHasSession(anchorId) && !sdkSessionLive(anchorId)) {
+        const sess = gcSdkSessions.get(anchorId);
+        const sid = sess?.sessionId;
+        dlog.info("merge", "pendingSession arrived during ready check — switching to acceptPending", { anchorId, sid });
+        try {
+          const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
+          if (!accept || !sid) throw new Error("acceptPendingSession unavailable or no sid");
+          await accept(sid);
+          stopSdkRingtone(anchorId);
+        } catch (e) {
+          dlog.error("merge", "fallback acceptPending failed after race", { anchorId, sid, msg: e.message });
+          throw new Error(`Couldn't accept the alert that arrived during pickup: ${e.message}`);
+        }
+      } else {
+        if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
+        dlog.info("merge", "firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
+        try { await assignCallToMe(anchorId); }
+        catch (e) {
+          sdkAutoAcceptIds.delete(anchorId);
+          dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
+          throw new Error(await explainAssignFailure(anchorId, e.message));
+        }
+        dlog.success("merge", "/assign returned ok");
       }
-      dlog.success("merge", "/assign returned ok");
     }
     anchorWasAssignedHere = true;
   }
@@ -5999,18 +6022,17 @@ function wireSdkEvents() {
     if (sdkAutoAcceptIds.has(cid)) {
       sdkAutoAcceptIds.delete(cid);
       try {
-        // SDK v6 acceptPendingSession expects { sessionId } — keyed by
-        // the propose id stored at pendingSessions[id]. Passing only
-        // conversationId fails with "Could not find a pendingSession
-        // matching accept params".
-        const acceptArgs = { sessionId: sid, conversationId: cid, autoAnswer: true, audioElement: el("gcSdkAudio") };
+        // SDK v6 acceptPendingSession takes a STRING sessionId, not an
+        // object. Internally proceedWithSession(t) does pendingSessions[t]
+        // — passing an object coerces to "[object Object]" and fails to
+        // match. audioElement is already wired via the SDK's defaults.
         const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.sessionManager?.acceptPendingSession?.bind(gcSdk.sessionManager);
-        if (accept) {
+        if (accept && sid) {
           dlog.info("gcSdk", "auto-accepting pendingSession (user-initiated pickup)", { cid, sid });
-          Promise.resolve(accept(acceptArgs)).catch(e =>
+          Promise.resolve(accept(sid)).catch(e =>
             dlog.error("gcSdk", "acceptPendingSession failed", { cid, sid, msg: e.message }));
         } else {
-          dlog.warn("gcSdk", "no acceptPendingSession method on SDK", { cid, sdkKeys: Object.keys(gcSdk).slice(0, 30) });
+          dlog.warn("gcSdk", "no acceptPendingSession method or no sessionId", { cid, sid, hasAccept: !!accept });
         }
       } catch (e) { dlog.error("gcSdk", "acceptPendingSession threw", { cid, sid, msg: e.message }); }
     } else {
