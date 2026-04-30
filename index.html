@@ -4413,36 +4413,45 @@ async function assignCallToMe(convId) {
   await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
 }
 
-// Toggle the user's voice (key 'call') acdAutoAnswer for the duration
-// of an action so /assign-driven merges complete without manual answer.
-// SDK shape verified in swagger.json:
-//   AutoAnswerSettings = { settings: { <AgentUIMediaType>: AutoAnswerSetting } }
-//   AutoAnswerSetting  = { enabled: boolean }
-// Media-type key is 'call' (per UserConversationSummary keys); 'voice'
-// gets rejected with "Value [voice] is not a valid property for object
-// [AgentUIMediaType]".
-//   GET    /api/v2/users/agentui/agents/autoanswer/{agentId}/settings
-//   PATCH  same endpoint with the body above
-//   perm:  agentUI:agents:view, agentUI:agents:edit
-// Always restores the prior value in finally — even if the action throws.
+// Toggle the user's voice acdAutoAnswer for the duration of an action
+// so /assign-driven merges complete without manual answering.
+//
+// IMPORTANT: GC has TWO auto-answer mechanisms:
+//   1. /agentui/agents/autoanswer/{id}/settings → DIGITAL channels only
+//      (Email, WebMessaging, SMS, etc.). 'voice'/'call' rejected.
+//   2. PATCH /api/v2/users/{userId} with {acdAutoAnswer: true} → VOICE.
+//      This is the only voice path. Verified via Genesys Cloud
+//      Developer Community thread + swagger PatchUser model.
+//
+// PATCH /users/{id} body uses UpdateUser schema with required `version`
+// field for optimistic locking — fetch user first to read current
+// acdAutoAnswer + version, then PATCH with both. Restore in finally.
+//   perm: admin / directory:user:edit / directory:organization:admin
 async function withAutoAnswerVoice(action) {
   if (!currentUser?.id) return action();
-  const url = `/api/v2/users/agentui/agents/autoanswer/${currentUser.id}/settings`;
-  let priorEnabled = false;
+  const url = `/api/v2/users/${currentUser.id}`;
+  let priorValue = false;
+  let priorVersion = null;
   try {
-    const r = await apiFetch(url);
-    priorEnabled = !!(r?.settings?.call?.enabled);
-  } catch { /* settings may not exist yet — treat as false */ }
+    const u = await apiFetch(url);
+    priorValue = !!u?.acdAutoAnswer;
+    priorVersion = u?.version ?? null;
+  } catch (e) { console.warn("Failed to read acdAutoAnswer for restore", e); }
   let toggled = false;
   try {
-    await apiFetch(url, { method: "PATCH", body: { settings: { call: { enabled: true } } } });
+    await apiFetch(url, { method: "PATCH", body: { acdAutoAnswer: true, version: priorVersion } });
     toggled = true;
     return await action();
   } finally {
     if (toggled) {
       try {
-        await apiFetch(url, { method: "PATCH", body: { settings: { call: { enabled: priorEnabled } } } });
-      } catch (e) { console.warn("Failed to restore acdAutoAnswer call", e); }
+        // Re-fetch the user to get the bumped version after our PATCH.
+        const u2 = await apiFetch(url);
+        await apiFetch(url, {
+          method: "PATCH",
+          body: { acdAutoAnswer: priorValue, version: u2?.version ?? priorVersion }
+        });
+      } catch (e) { console.warn("Failed to restore acdAutoAnswer", e); }
     }
   }
 }
