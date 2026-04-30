@@ -3289,7 +3289,7 @@ async function conferenceSelectedQueueCalls() {
     showBanner({
       type: "info",
       title: "Conference requested",
-      message: `${result.merged} calls conferenced${result.anchorAssigned ? " (picked up the longest-waiting call as anchor)" : ""}.`,
+      message: `${result.merged} calls conferenced${result.failed?.length ? `; ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}` : ""}.`,
       autoHideMs: 4000
     });
     queueViewSelectedIds.clear();
@@ -3984,7 +3984,7 @@ function openMergeModal(row) {
       showBanner({
         type: "info",
         title: "Merge requested",
-        message: `Conferenced ${result.merged} calls${result.anchorAssigned ? " (picked up the longest-waiting call as anchor)" : ""}.`,
+        message: `Conferenced ${result.merged} calls${result.failed?.length ? `; ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}` : ""}.`,
         autoHideMs: 4000
       });
       closeModal("mergeModal");
@@ -5102,26 +5102,26 @@ async function ensureAssignReady(convId) {
 
 // SDK-backed merge of N queue calls.
 //
-// Architecture: pickup-one + conference-the-rest.
-//   1. If user already has a connected call, use it as the anchor.
-//      Otherwise /assign one queue call (the longest-waiting one) and
-//      let the SDK's autoConnectSessions auto-accept the pendingSession.
-//   2. Wait for the anchor to be in CONNECTED state.
-//   3. PATCH /conference on the anchor with the remaining conversation
-//      IDs as participantsToAdd. GC pulls those customers' legs into
-//      the anchor's conversation server-side — no second /assign,
-//      no INTERACTING-rejection, no concurrent-softphone dependency.
+// Architecture: assign-each-then-conference (IW-Merge pattern).
+//   GC's /conference endpoint requires the calling user to be a
+//   connected participant on EVERY conversation in the merge — it
+//   refuses with "no common user" otherwise. So /assign each selected
+//   queue call onto the user, wait for all of them to land in
+//   connected/held state, then PATCH /conference with the rest.
 //
-// /assign is the documented pickup verb (carries conversation:call:pull).
-// /replace/agent is a transfer endpoint and produces a transfer-target
-// leg, NOT a pendingSession on the WebRTC station — that's why the
-// previous N-replace approach failed silently.
+//   Failed /assigns are tolerated (collected, not aborted) — we still
+//   conference whichever ones did pick up, matching IW-Merge's
+//   permissive behavior.
+//
+//   The SDK's auto-accept (via sdkAutoAcceptIds) handles the audio
+//   side: each /assign causes a pendingSession event on our station,
+//   our handler accepts it via acceptPendingSession(sessionId).
 async function mergeQueueCallsViaSdk(ids) {
   dlog.info("merge", "mergeQueueCallsViaSdk start", { ids, count: ids?.length });
   if (!currentUser?.id) throw new Error("No current user");
   if (!ids || ids.length < 2) throw new Error("Need 2+ calls to conference");
 
-  // 1. Refresh from API so anchor selection is up to date
+  // 1. Refresh from API so we know which selected ids are already ours.
   try { await seedMyInteractions(); } catch {}
 
   // 2. Pre-flight eligibility on every selected call (station, signed in)
@@ -5130,173 +5130,125 @@ async function mergeQueueCallsViaSdk(ids) {
     if (why) throw new Error(why);
   }
 
-  // 3. Pick anchor. Preference order:
-  //    A. Already-connected/held call we're on — no pickup needed.
-  //    B. Selected call the SDK is alerting us on — accept that
-  //       pendingSession directly. Cleaner than /assign and works even
-  //       when /assign would 400 with "Targeted User ID is not valid"
-  //       (which it does when GC has already targeted us).
-  //    C. Longest-waiting selected queue call — pick up via /assign.
-  let anchorId = null;
-  let pickupMode = null; // "none" | "acceptPending" | "assign"
+  // 3. Make sure we're on queue + queue member. Use the first selected
+  //    id for the queue-membership check (all selected calls are in the
+  //    same queue in the typical use case).
+  await ensureAssignReady(ids[0]);
 
-  // A. Already on a call?
-  const liveAnchor = [...conversations.values()]
-    .find(r => r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held"));
-  if (liveAnchor) {
-    anchorId = liveAnchor.id;
-    pickupMode = "none";
-  }
-  // B. SDK already alerting us on one of the selected ids?
-  if (!anchorId && gcSdkReady) {
-    for (const id of ids) {
-      if (sdkHasSession(id) && !sdkSessionLive(id)) { anchorId = id; pickupMode = "acceptPending"; break; }
-    }
-  }
-  // C. Pick the longest-waiting queue call from the selection.
-  if (!anchorId) {
-    const queueCalls = ids
-      .map(id => conversations.get(id))
-      .filter(r => r && !r.hasMe && !r.disconnected)
-      .sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
-    if (!queueCalls.length) throw new Error("No pickup-able queue call in the selection.");
-    anchorId = queueCalls[0].id;
-    pickupMode = "assign";
-  }
-  dlog.info("merge", "anchor selection", { anchorId, pickupMode });
+  // 4. Mark every selected call for SDK auto-accept BEFORE firing any
+  //    /assigns — pendingSession events arrive within tens of ms.
+  if (gcSdkReady) for (const id of ids) sdkAutoAcceptIds.add(id);
 
-  let anchorWasAssignedHere = false;
-  if (pickupMode !== "none") {
-    await ensureAssignReady(anchorId);
-    if (!(await isCallStillActive(anchorId))) {
-      throw new Error("Anchor queue call hung up before pickup.");
+  // 5. Sequential /assign loop. Skip calls already ours; tolerate
+  //    per-call failures (collected, not aborted) — IW-Merge does the
+  //    same. Mirrors C:\Users\krb3qy\Documents\projects\IW-Merge-Widget
+  //    \index.html lines 1337-1347 verbatim.
+  const assignFailures = [];
+  for (const id of ids) {
+    const r = conversations.get(id);
+    if (r?.hasMe) {
+      dlog.info("merge", "already on this call — skipping /assign", { id });
+      continue;
     }
-    if (pickupMode === "acceptPending") {
-      const sess = gcSdkSessions.get(anchorId);
+    if (!(await isCallStillActive(id))) {
+      assignFailures.push({ id, err: "call hung up before assign" });
+      continue;
+    }
+    // If the SDK already has a pendingSession for this call (e.g. ensureAssignReady's
+    // presence flip caused GC to route this call to us), accept it
+    // directly — /assign would 400 with 'Targeted User ID is not valid'.
+    if (gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
+      const sess = gcSdkSessions.get(id);
       const sid = sess?.sessionId;
-      dlog.info("merge", "anchor has pendingSession — accepting directly", { anchorId, sid });
+      dlog.info("merge", "pendingSession already exists — accepting", { id, sid });
       try {
-        const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-        if (!accept) throw new Error("SDK has no acceptPendingSession method");
-        if (!sid) throw new Error("SDK pending session has no id");
-        await accept(sid);
-        stopSdkRingtone(anchorId);
-        seedConvWithRetry(anchorId, 3, 700);
+        const accept = gcSdk.acceptPendingSession?.bind(gcSdk);
+        if (accept && sid) {
+          await accept(sid);
+          stopSdkRingtone(id);
+          sdkAutoAcceptIds.delete(id);
+          seedConvWithRetry(id, 3, 700);
+        }
       } catch (e) {
-        dlog.error("merge", "accept of existing pendingSession failed", { anchorId, sid, msg: e.message });
-        throw new Error(`Couldn't accept the alert that's already ringing for this call: ${e.message}`);
+        dlog.warn("merge", "acceptPending failed mid-loop", { id, msg: e.message });
+        assignFailures.push({ id, err: e.message });
       }
-    } else {
-      // pickupMode === "assign". After ensureAssignReady flips us
-      // on-queue, GC's routing engine routes ONE of the queued calls to
-      // us — but it might not be the one we chose as anchor. Whichever
-      // call GC picks gets a pendingSession; the other(s) stay queued.
-      // So we wait for a pendingSession on ANY of the selected ids,
-      // then re-anchor to whichever arrives. If after 3s nothing has
-      // arrived, fall through to /assign on our chosen anchor.
-      const tryAcceptId = async (id) => {
+      continue;
+    }
+    dlog.info("merge", "POST /assign", { id });
+    try { await assignCallToMe(id); }
+    catch (e) {
+      sdkAutoAcceptIds.delete(id);
+      // If GC says invalid.id and we're now alerting on this call,
+      // accept the pending session (race: GC routed it to us before
+      // /assign).
+      if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
         const sess = gcSdkSessions.get(id);
         const sid = sess?.sessionId;
-        if (!sid) return false;
-        const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-        if (!accept) return false;
-        await accept(sid);
-        stopSdkRingtone(id);
-        seedConvWithRetry(id, 3, 700);
-        return true;
-      };
-
-      let reAnchoredTo = null;
-      if (gcSdkReady) {
-        const deadline = Date.now() + 3000;
-        while (Date.now() < deadline) {
-          for (const id of ids) {
-            if (sdkHasSession(id) && !sdkSessionLive(id)) { reAnchoredTo = id; break; }
+        try {
+          const accept = gcSdk.acceptPendingSession?.bind(gcSdk);
+          if (accept && sid) {
+            await accept(sid);
+            stopSdkRingtone(id);
+            seedConvWithRetry(id, 3, 700);
+            continue;
           }
-          if (reAnchoredTo) break;
-          await new Promise(r => setTimeout(r, 250));
+        } catch (e2) {
+          assignFailures.push({ id, err: `assign 400 + acceptPending failed: ${e2.message}` });
+          continue;
         }
       }
+      assignFailures.push({ id, err: await explainAssignFailure(id, e.message) });
+    }
+  }
 
-      if (reAnchoredTo) {
-        if (reAnchoredTo !== anchorId) {
-          dlog.info("merge", "GC routed a different selected call to us — re-anchoring", { from: anchorId, to: reAnchoredTo });
-          anchorId = reAnchoredTo;
-        } else {
-          dlog.info("merge", "pendingSession arrived for original anchor — accepting", { anchorId });
-        }
+  // 6. Wait up to 8s for ALL non-failed ids to reach connected/held.
+  //    /conference requires us to be a connected participant on each.
+  const targetIds = ids.filter(id => !assignFailures.find(f => f.id === id));
+  dlog.info("merge", "waiting for assigned calls to land", { targetIds });
+  const landDeadline = Date.now() + 8000;
+  while (Date.now() < landDeadline) {
+    const allReady = targetIds.every(id => {
+      const r = conversations.get(id);
+      if (!r) return false;
+      if (sdkSessionLive(id)) return true;
+      return r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held");
+    });
+    if (allReady) break;
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  // 7. Final list = calls where we actually landed as a connected participant.
+  await seedMyInteractions().catch(() => {});
+  const finalIds = targetIds.filter(id => {
+    if (sdkSessionLive(id)) return true;
+    const r = conversations.get(id);
+    return r?.hasMe && !r?.disconnected;
+  });
+  dlog.info("merge", "ready to conference", { finalIds, failed: assignFailures });
+
+  if (finalIds.length < 2) {
+    const note = assignFailures.length ? ` (${assignFailures.map(f => f.err).join("; ")})` : "";
+    throw new Error(`Need 2+ connected calls to conference; only ${finalIds.length} ready${note}`);
+  }
+
+  // 8. PATCH /conference. Target = first connected call; merge the rest in.
+  dlog.info("merge", "PATCH /conference", { target: finalIds[0], others: finalIds.slice(1) });
+  await mergeMany(finalIds);
+  dlog.success("merge", "conference complete", { merged: finalIds.length });
+
+  // 9. Unhold all SDK sessions so audio is live for everyone.
+  if (gcSdkReady) {
+    for (const id of finalIds) {
+      if (sdkSessionHeld(id)) {
         try {
-          if (!(await tryAcceptId(anchorId))) throw new Error("acceptPendingSession returned false");
-        } catch (e) {
-          dlog.error("merge", "accept of routed pendingSession failed", { anchorId, msg: e.message });
-          throw new Error(`Couldn't accept the alert that arrived during pickup: ${e.message}`);
-        }
-      } else {
-        if (gcSdkReady) sdkAutoAcceptIds.add(anchorId);
-        dlog.info("merge", "no propose after 3s — firing /assign on anchor", { anchorId, willAutoAccept: gcSdkReady });
-        try {
-          await assignCallToMe(anchorId);
-          dlog.success("merge", "/assign returned ok");
-        } catch (e) {
-          sdkAutoAcceptIds.delete(anchorId);
-          // Last-ditch: if /assign 400's because we're targeted on
-          // some other selected call, accept that one.
-          if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady) {
-            for (const id of ids) {
-              if (sdkHasSession(id) && !sdkSessionLive(id)) {
-                dlog.warn("merge", "/assign 400 — found pendingSession, accepting it", { originalAnchor: anchorId, accepting: id });
-                try {
-                  if (await tryAcceptId(id)) { anchorId = id; break; }
-                } catch {}
-              }
-            }
-            if (anchorId === undefined) {
-              throw new Error(await explainAssignFailure(anchorId, e.message));
-            }
-          } else {
-            dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
-            throw new Error(await explainAssignFailure(anchorId, e.message));
-          }
-        }
+          const sess = sdkGetSession(id);
+          if (sess?.resume) await sess.resume();
+        } catch {}
       }
     }
-    anchorWasAssignedHere = true;
   }
-
-  if (anchorWasAssignedHere) {
-    dlog.info("merge", "waiting for anchor to be connected", { anchorId });
-    const ready = await waitForCallReady(anchorId, 12000);
-    if (!ready) {
-      dlog.error("merge", "anchor did not connect within 12s", { anchorId, sdkSessions: [...gcSdkSessions.entries()].map(([k,v]) => ({cid: k, ...v})) });
-      throw new Error("Anchor call did not connect in time. Check WebRTC station / mic permissions.");
-    }
-    dlog.success("merge", "anchor connected", { anchorId });
-    await new Promise(r => setTimeout(r, 800));
-  }
-
-  // 5. Build the list of conversations to merge IN to the anchor —
-  //    everything in the original selection except the anchor itself,
-  //    minus any that have hung up since we started.
-  const toConference = [];
-  for (const id of ids) {
-    if (id === anchorId) continue;
-    if (await isCallStillActive(id)) toConference.push(id);
-  }
-  if (toConference.length === 0) {
-    throw new Error("No remaining calls to conference into anchor.");
-  }
-
-  // 6. PATCH /conference on the anchor; pulls the others' customer legs in.
-  dlog.info("merge", "PATCH /conference", { anchorId, conversationIds: toConference });
-  await mergeMany([anchorId, ...toConference]);
-  dlog.success("merge", "conference complete", { merged: 1 + toConference.length });
-
-  // 7. If the anchor SDK session was somehow held, unhold so the conference
-  //    is live for everyone.
-  if (gcSdkReady && sdkSessionHeld(anchorId)) {
-    try { await gcSdk.setHold({ conversationId: anchorId, hold: false }); } catch {}
-  }
-  return { merged: 1 + toConference.length, anchorId, anchorAssigned: anchorWasAssignedHere };
+  return { merged: finalIds.length, failed: assignFailures };
 }
 
 // Put one of OUR calls on hold (or unhold).
