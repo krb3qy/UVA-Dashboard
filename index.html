@@ -5148,31 +5148,13 @@ async function mergeQueueCallsViaSdk(ids) {
   //    /assigns — pendingSession events arrive within tens of ms.
   if (gcSdkReady) for (const id of ids) sdkAutoAcceptIds.add(id);
 
-  // 5. Sequential /assign loop. Before each /assign, HOLD any active
-  //    calls Alex is already on — GC's routing engine refuses to deliver
-  //    a new call to an INTERACTING agent (returns 'Targeted User ID is
-  //    not valid' 400) unless his prior call(s) are held. With prior
-  //    calls held, the server treats him as having a free routing slot
-  //    and the next /assign succeeds. After all /assigns complete, the
-  //    /conference call merges them together (and the customer-side
-  //    behavior is the same regardless of held state).
+  // 5. Sequential /assign loop. CRITICAL ORDERING: each /assign must be
+  //    fully accepted by the SDK (sessionStarted/hasMedia=true) BEFORE
+  //    the next /assign fires. GC rejects subsequent /assigns with
+  //    'User is pending on conversation X, cannot assign Y' while a
+  //    prior pendingSession remains unaccepted. Auto-accept happens
+  //    via the pendingSession event handler (sdkAutoAcceptIds path).
   const assignFailures = [];
-  const heldByMerge = new Set(); // ids we put on hold during this merge
-
-  const holdActiveCalls = async () => {
-    // Hold every active call Alex is on that isn't already held.
-    const targets = [...conversations.values()].filter(r =>
-      r.hasMe && !r.disconnected && !r.held);
-    for (const r of targets) {
-      try {
-        await holdMyCall(r.id, true);
-        heldByMerge.add(r.id);
-        const s = gcSdkSessions.get(r.id); if (s) s.hold = true;
-        if (r) r.held = true;
-      } catch (e) { dlog.warn("merge", `hold prior call failed`, { id: r.id, msg: e.message }); }
-    }
-    if (targets.length) dlog.info("merge", `held ${targets.length} prior call(s) before next /assign`);
-  };
 
   const tryAcceptPending = async (id) => {
     const sess = gcSdkSessions.get(id);
@@ -5187,8 +5169,25 @@ async function mergeQueueCallsViaSdk(ids) {
     return true;
   };
 
+  // Wait until the SDK confirms this conv is connected (hasMedia=true)
+  // OR the conversations map shows us as a connected participant.
+  // Don't move on until we're past 'pending'.
+  const waitForAccepted = async (id, timeoutMs = 12000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (sdkSessionLive(id)) return true;
+      const r = conversations.get(id);
+      if (r?.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held")) return true;
+      // If pendingSession exists but hasn't auto-accepted, force-accept.
+      if (gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
+        try { await tryAcceptPending(id); } catch {}
+      }
+      await new Promise(r => setTimeout(r, 250));
+    }
+    return false;
+  };
+
   for (const id of ids) {
-    // Refresh local state in case WS hasn't caught up.
     try { await seedMyInteractions(); } catch {}
     const r = conversations.get(id);
     if (r?.hasMe) {
@@ -5199,53 +5198,41 @@ async function mergeQueueCallsViaSdk(ids) {
       assignFailures.push({ id, err: "call hung up before assign" });
       continue;
     }
-    // SDK might already have a pendingSession (race: GC routed this
-    // call to us during a prior step). Accept it.
+    // SDK already alerting us → accept and wait for it to land.
     if (gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
       dlog.info("merge", "pendingSession already exists — accepting", { id });
-      try { await tryAcceptPending(id); }
+      try {
+        await tryAcceptPending(id);
+        const landed = await waitForAccepted(id);
+        if (!landed) assignFailures.push({ id, err: "did not connect in 12s after accept" });
+      }
       catch (e) { assignFailures.push({ id, err: e.message }); }
       continue;
     }
-    // Free up Alex's routing slot before the assign.
-    await holdActiveCalls();
-    // Brief settle — server needs a moment to register the hold.
-    await new Promise(r => setTimeout(r, 300));
+    if (gcSdkReady) sdkAutoAcceptIds.add(id);
     dlog.info("merge", "POST /assign", { id });
-    try { await assignCallToMe(id); }
-    catch (e) {
+    try {
+      await assignCallToMe(id);
+    } catch (e) {
       sdkAutoAcceptIds.delete(id);
-      if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
-        try {
-          if (await tryAcceptPending(id)) continue;
-        } catch (e2) {
-          assignFailures.push({ id, err: `assign 400 + acceptPending failed: ${e2.message}` });
-          continue;
-        }
-      }
       assignFailures.push({ id, err: await explainAssignFailure(id, e.message) });
+      continue;
     }
-  }
-
-  // 6. Wait up to 8s for ALL non-failed ids to reach connected/held.
-  //    /conference requires us to be a connected participant on each.
-  const targetIds = ids.filter(id => !assignFailures.find(f => f.id === id));
-  dlog.info("merge", "waiting for assigned calls to land", { targetIds });
-  const landDeadline = Date.now() + 8000;
-  while (Date.now() < landDeadline) {
-    const allReady = targetIds.every(id => {
-      const r = conversations.get(id);
-      if (!r) return false;
-      if (sdkSessionLive(id)) return true;
-      return r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held");
-    });
-    if (allReady) break;
-    await new Promise(r => setTimeout(r, 300));
+    // Wait for THIS call to be accepted before firing the next /assign.
+    // GC rejects 'pending on conversation X cannot assign Y' otherwise.
+    dlog.info("merge", "waiting for assign to land", { id });
+    const landed = await waitForAccepted(id);
+    if (!landed) {
+      dlog.warn("merge", "assigned but did not connect in 12s — proceeding anyway", { id });
+      assignFailures.push({ id, err: "assigned but never connected (timeout)" });
+    } else {
+      dlog.success("merge", "assigned + connected", { id });
+    }
   }
 
   // 7. Final list = calls where we actually landed as a connected participant.
   await seedMyInteractions().catch(() => {});
-  const finalIds = targetIds.filter(id => {
+  const finalIds = ids.filter(id => {
     if (sdkSessionLive(id)) return true;
     const r = conversations.get(id);
     return r?.hasMe && !r?.disconnected;
