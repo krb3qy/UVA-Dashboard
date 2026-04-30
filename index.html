@@ -3583,41 +3583,62 @@ async function doAction(act, row) {
       }
       case "pickup": {
         // If the SDK is already alerting us on this call, accept directly.
-        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
-          const sess = gcSdkSessions.get(convId);
+        const tryAcceptPending = async (cid) => {
+          const sess = gcSdkSessions.get(cid);
           const sid = sess?.sessionId;
+          if (!sid) return false;
           const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-          if (accept && sid) {
-            await accept(sid);
-            stopSdkRingtone(convId);
-            seedConvWithRetry(convId, 3, 700);
-            break;
-          }
+          if (!accept) return false;
+          await accept(sid);
+          stopSdkRingtone(cid);
+          seedConvWithRetry(cid, 3, 700);
+          return true;
+        };
+
+        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+          if (await tryAcceptPending(convId)) break;
         }
         const why = assignEligibilityError(convId);
         if (why) throw new Error(why);
-        // Auto-flip the user on queue if they're OFF_QUEUE / NOT_RESPONDING,
-        // verify station + queue membership. Without this, /assign 400s
-        // for an off-queue agent. Mirrors what the prior alert-extension
-        // pickup flow did (presence flip + assign).
+
+        // Auto-flip on-queue if needed, validate station + queue membership.
         await ensureAssignReady(convId);
-        // Re-check: if pendingSession arrived during ensureAssignReady
-        // (presence flip can route a queued call to us), accept that
-        // directly instead of /assign'ing.
-        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
-          const sess = gcSdkSessions.get(convId);
-          const sid = sess?.sessionId;
-          const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-          if (accept && sid) {
-            await accept(sid);
-            stopSdkRingtone(convId);
-            seedConvWithRetry(convId, 3, 700);
-            break;
+
+        // After going on-queue, GC's routing engine often routes the
+        // queued call to us automatically — adding us as a participant
+        // and firing the SDK propose within ~1-2s. If we beat that with
+        // /assign, GC 400s with 'Targeted User ID is not valid' because
+        // we're already targeted. Wait up to 3s for the pendingSession
+        // to land and accept it. Only fall through to /assign if it
+        // doesn't arrive.
+        if (gcSdkReady) {
+          const deadline = Date.now() + 3000;
+          while (Date.now() < deadline) {
+            if (sdkHasSession(convId) && !sdkSessionLive(convId)) {
+              dlog.info("doAction", "pickup: pendingSession arrived after ensureAssignReady — accepting", { convId });
+              if (await tryAcceptPending(convId)) return;
+              break;
+            }
+            // Check the conversation directly: if Alex is already a
+            // live participant (any state), GC has accepted the route —
+            // just wait for the SDK propose.
+            await new Promise(r => setTimeout(r, 250));
           }
+          dlog.info("doAction", "pickup: no pendingSession after ready — falling through to /assign", { convId });
         }
+
         if (gcSdkReady) sdkAutoAcceptIds.add(convId);
         try { await assignCallToMe(convId); }
-        catch (e) { sdkAutoAcceptIds.delete(convId); throw e; }
+        catch (e) {
+          sdkAutoAcceptIds.delete(convId);
+          // If GC says target not valid and we have a pendingSession
+          // by now, accept that instead.
+          if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+            dlog.warn("doAction", "pickup: /assign 400 — falling back to acceptPendingSession", { convId });
+            if (await tryAcceptPending(convId)) return;
+          }
+          throw e;
+        }
         break;
       }
       case "listen":
