@@ -5241,9 +5241,40 @@ async function mergeQueueCallsViaSdk(ids) {
     try {
       await assignCallToMe(id);
     } catch (e) {
-      sdkAutoAcceptIds.delete(id);
-      assignFailures.push({ id, err: await explainAssignFailure(id, e.message) });
-      continue;
+      // GC sometimes refuses /assign with "User is pending on
+      // conversation X". X is another conv we have a pending SDK
+      // session for. Accept that one to clear the pending state, then
+      // retry /assign on this id.
+      const pendingMatch = /pending on conversation ([0-9a-f-]{36})/i.exec(e.message || "");
+      if (pendingMatch) {
+        const stuckId = pendingMatch[1];
+        dlog.warn("merge", "/assign rejected — pending on another conv; accepting it then retrying", { id, stuckId });
+        try {
+          if (gcSdkReady && sdkHasSession(stuckId) && !sdkSessionLive(stuckId)) {
+            await tryAcceptPending(stuckId);
+            await waitForAccepted(stuckId, 8000);
+          } else {
+            // No SDK session for the stuck id — can't unstick locally.
+            // Wait briefly in case the SDK propose arrives soon.
+            await new Promise(r => setTimeout(r, 1500));
+            if (sdkHasSession(stuckId) && !sdkSessionLive(stuckId)) {
+              await tryAcceptPending(stuckId);
+              await waitForAccepted(stuckId, 8000);
+            }
+          }
+          // Retry the original /assign now.
+          dlog.info("merge", "retrying /assign after clearing pending", { id });
+          await assignCallToMe(id);
+        } catch (e2) {
+          sdkAutoAcceptIds.delete(id);
+          assignFailures.push({ id, err: `${e.message}; retry: ${e2.message}` });
+          continue;
+        }
+      } else {
+        sdkAutoAcceptIds.delete(id);
+        assignFailures.push({ id, err: await explainAssignFailure(id, e.message) });
+        continue;
+      }
     }
     // Wait for THIS call to be accepted before firing the next /assign.
     // GC rejects 'pending on conversation X cannot assign Y' otherwise.
