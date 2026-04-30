@@ -5851,11 +5851,23 @@ async function initWebrtcSdk() {
     gcSdkReady = true;
     dlog.success("gcSdk", "initialize complete");
     setStatus("Live", "ok");
+    // Replace any stale "audio unavailable" banner with a brief confirmation
+    // that the dashboard tab is now this user's WebRTC station. Auto-hides.
+    try {
+      showBanner({
+        type: "info",
+        title: "Audio in this tab is live",
+        message: "This dashboard tab is now your WebRTC softphone. Calls will ring here.",
+        autoHideMs: 4000
+      });
+    } catch {}
     try {
       const concurrent = gcSdk.isConcurrentSoftphoneSessionsEnabled?.();
       const persistent = gcSdk.isPersistentConnectionEnabled?.();
       const station = gcSdk.station;
-      dlog.info("gcSdk", "capabilities", { concurrent, persistent, station });
+      // Probe additional shape — useful for SDK version diffs.
+      const sdkKeys = Object.keys(gcSdk).filter(k => !k.startsWith("_")).slice(0, 30);
+      dlog.info("gcSdk", "capabilities", { concurrent, persistent, station, sdkKeys });
     } catch (e) { dlog.warn("gcSdk", "capability probe failed", { msg: e.message }); }
   } catch (e) {
     gcSdkError = e?.message || String(e);
