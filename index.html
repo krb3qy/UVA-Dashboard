@@ -346,9 +346,28 @@
     .ctx-menu .item.danger { color: #c00000; }
     .ctx-menu .item.danger:hover { background: #c00000; color: #fff; }
 
-    /* Popout placeholder */
-    #popoutPlaceholder { display: none; padding: 40px; text-align: center; color: var(--win-muted); background: #fff; }
-    #popoutPlaceholder.active { display: block; flex: 1; }
+    /* Inline call strip — under the status bar, one chunk per active call */
+    .callstrip { display: none; padding: 4px 8px; background: #fff8e1;
+      border-bottom: 1px solid #d4c97a; font-size: 12px; gap: 8px;
+      align-items: center; flex: 0 0 auto; flex-wrap: wrap; }
+    .callstrip.active { display: flex; }
+    .callstrip .cs-call { display: inline-flex; gap: 6px; align-items: center;
+      padding: 2px 6px; border: 1px solid var(--win-border); background: #fff;
+      border-radius: 3px; }
+    .callstrip .cs-call.held     { background: #fff0d6; border-color: #d4a860; }
+    .callstrip .cs-call.alerting { background: #fff7d2; border-color: #c0b776;
+      animation: cs-pulse 1.2s steps(2) infinite; }
+    .callstrip .cs-name { font-weight: 600; max-width: 220px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
+    .callstrip .cs-media-mine    { color: #060; }
+    .callstrip .cs-media-other   { color: #888; }
+    .callstrip button { background: #fafafa; border: 1px solid #888;
+      border-radius: 2px; padding: 0 6px; font: inherit; font-size: 11px;
+      height: 20px; cursor: pointer; }
+    .callstrip button:hover { background: #fff7d2; }
+    .callstrip button.danger { color: #c00000; border-color: #c00000; }
+    .callstrip button.danger:hover { background: #c00000; color: #fff; }
+    @keyframes cs-pulse { 50% { background: #ffe8a0; } }
 
     /* Row drag preview */
     .drag-preview { position: fixed; background: #fff; border: 1px solid var(--win-accent);
@@ -430,12 +449,6 @@
         <div class="mi" data-cmd="makeCall">Make Call…</div>
       </div>
     </div>
-    <div class="item" data-menu="window">Window
-      <div class="menu-dropdown">
-        <div class="mi" data-cmd="popout">Pop Out</div>
-        <div class="mi" data-cmd="popin">Pop In</div>
-      </div>
-    </div>
     <div class="item" data-menu="help">Help
       <div class="menu-dropdown">
         <div class="mi" data-cmd="userGuide">User Guide</div>
@@ -460,14 +473,11 @@
     <span class="chunk" id="sbClock">—</span>
   </div>
 
+  <!-- INLINE CALL STRIP — one chunk per active call, populated by renderInlineCallStrip() -->
+  <div id="callStrip" class="callstrip"></div>
+
   <!-- BANNER -->
   <div id="bannerHost" class="banner-host hidden"></div>
-
-  <!-- POPOUT PLACEHOLDER -->
-  <div id="popoutPlaceholder">
-    <p>The UVA Dashboard is open in a separate window.</p>
-    <button id="popinFromPlaceholder" class="btn btn-primary">Return Here</button>
-  </div>
 
   <!-- MAIN CONTENT -->
   <div id="mainContent">
@@ -650,11 +660,6 @@
     <button class="tbtn" data-act="addParty" title="Add number to current call / conference">
       <svg viewBox="0 0 16 16"><path fill="#060" d="M10 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM4 9h12v2H4V9zm-3 0v2H0V9h1zm12-2v2h-1V7h1z"/><path fill="#060" d="M3 12h2v4H3v-4zm-2 2v-1H0v-1h1v-1h1v1h1v1H2v1H1z"/></svg>
       <span class="lbl">Add Party</span>
-    </button>
-    <span class="sp"></span>
-    <button class="tbtn" data-act="popout" title="Pop out / Pop in" id="popoutBtn">
-      <svg viewBox="0 0 16 16"><path fill="none" stroke="#000" d="M2 2h7v2M9 2v5H2V2zm5 5V2h-5l2 2-4 4 1 1 4-4 2 2z"/></svg>
-      <span class="lbl">Pop Out</span>
     </button>
   </div>
 </div>
@@ -983,10 +988,13 @@
         <li>Save your current layout (tabs, columns, splitter sizes, sidebar state) via <strong>Workspaces &gt; Manage Workspaces</strong>. Switch layouts from the Workspaces menu.</li>
       </ul>
 
-      <h3 style="margin:0 0 6px 0;font-size:13px">Popout</h3>
+      <h3 style="margin:0 0 6px 0;font-size:13px">Audio in this tab</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
-        <li>Toolbar <strong>Pop Out</strong> opens the dashboard in its own window. Token carries over via localStorage.</li>
+        <li>Calls ring and mix audio inside this dashboard tab via the Genesys Cloud WebRTC SDK. There is no need to keep a separate Genesys client window open.</li>
+        <li>The inline call strip under the status bar shows each active call. The green dot means audio is live in this tab.</li>
+        <li>Browser must allow microphone access. If the SDK fails to initialize (mic blocked, deskphone station, or transient error), a yellow banner appears and the dashboard falls back to the legacy REST path.</li>
       </ul>
+
     </div>
     <div class="actions">
       <button class="btn btn-primary" data-close>Got it</button>
@@ -1066,25 +1074,20 @@
 <!-- WEBRTC SDK AUDIO SINK -->
 <audio id="gcSdkAudio" autoplay></audio>
 
-<!-- Genesys Cloud WebRTC SDK (optional — Phase 1 behind localStorage flag gc_uvad_sdk=on) -->
+<!-- Genesys Cloud WebRTC SDK — brings call audio into this tab -->
 <script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js" crossorigin="anonymous"></script>
 
 <script>
 // ================================================================
-//  Security gate — only run inside GC iframe OR as popout with token
+//  Security gate — standalone deployment (GH Pages / localhost / file)
 // ================================================================
 (function gate() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const mode = urlParams.get("mode");
-  const hasPopoutToken = !!localStorage.getItem("gc_uvad_popout_token");
-  const framed = window.self !== window.top;
-  if (framed || mode === "popout" || hasPopoutToken ||
-      location.hostname === "krb3qy.github.io" || location.hostname === "localhost" ||
+  if (location.hostname === "krb3qy.github.io" || location.hostname === "localhost" ||
       location.protocol === "file:") {
     document.getElementById("security-block").style.display = "none";
     document.getElementById("app-root").style.display = "flex";
   } else {
-    document.getElementById("security-block").innerText = "This page must be loaded inside Genesys Cloud.";
+    document.getElementById("security-block").innerText = "This page must be loaded from the approved domain.";
   }
 })();
 
@@ -1135,9 +1138,7 @@ let currentUser = null;            // {id, name, stationId, ...}
 
 // Genesys Cloud WebRTC SDK runtime state. The dashboard becomes a
 // WebRTC station for the user — calls ring / pick up / merge with
-// audio in THIS tab, no bouncing to GC native client. Phase 1 ships
-// behind localStorage["gc_uvad_sdk"]==="on" so we can land code with
-// zero behavior change for users who haven't opted in.
+// audio in THIS tab, no bouncing to GC native client.
 let gcSdk = null;
 let gcSdkReady = false;
 let gcSdkError = null;
@@ -1388,8 +1389,8 @@ async function sha256(input) { return crypto.subtle.digest("SHA-256", new TextEn
 async function createPkceChallenge(v) { return base64UrlEncode(await sha256(v)); }
 
 // Token lives in localStorage (matches Reporting-Dashboard-App pattern):
-// persists across popouts, tab closes, and page reloads. sessionStorage
-// was clearing the token on every reload so the app was redirecting
+// persists across tab closes and page reloads. sessionStorage was
+// clearing the token on every reload so the app was redirecting
 // constantly during normal use.
 function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -2304,7 +2305,6 @@ function renderToolbar() {
   // Conference Dialer: always available.
   enable("confDialer", true);
   enable("settings", true);
-  enable("popout", true);
 
   // Toolbar Hold label swap
   const holdBtn = document.querySelector('.tbtn[data-act="hold"]');
@@ -2825,6 +2825,52 @@ function renderAll() {
   renderDirectory();
   renderMyPresence();
   renderCallWidgets();
+  renderInlineCallStrip();
+}
+
+// Inline call strip — one chunk per active call (hasMe=true) showing
+// caller name, media-mine indicator (●/○), and Answer/Hold/Mute/End
+// buttons. Buttons fan out through doAction() so the same code path
+// handles both SDK media calls and legacy REST PATCHes.
+function renderInlineCallStrip() {
+  const host = el("callStrip");
+  if (!host) return;
+  const myCalls = [...conversations.values()].filter(r => r.hasMe && !r.disconnected);
+  if (myCalls.length === 0) {
+    host.classList.remove("active");
+    host.innerHTML = "";
+    return;
+  }
+  host.classList.add("active");
+  host.innerHTML = myCalls.map(r => {
+    const name = escape(r.name || r.number || r.id);
+    const cls = r.stateKey === "held" ? "held" :
+                r.stateKey === "alerting" ? "alerting" : "";
+    const audioMine = sdkHasSession(r.id);
+    const mediaIcon = audioMine
+      ? `<span class="cs-media-mine" title="Audio in this tab">●</span>`
+      : `<span class="cs-media-other" title="Audio not in this tab">○</span>`;
+    const isAlerting = r.stateKey === "alerting";
+    const isHeld = r.stateKey === "held";
+    const muted = sdkSessionMuted(r.id);
+    const buttons = isAlerting
+      ? `<button data-cs-act="answer" data-cid="${escape(r.id)}">Answer</button>`
+      : `<button data-cs-act="hold" data-cid="${escape(r.id)}">${isHeld ? "Unhold" : "Hold"}</button>
+         <button data-cs-act="mute" data-cid="${escape(r.id)}">${muted ? "Unmute" : "Mute"}</button>`;
+    return `<span class="cs-call ${cls}" data-cid="${escape(r.id)}">
+      ${mediaIcon}
+      <span class="cs-name" title="${name}">${name}</span>
+      ${buttons}
+      <button class="danger" data-cs-act="disconnect" data-cid="${escape(r.id)}">End</button>
+    </span>`;
+  }).join("");
+  host.querySelectorAll("button[data-cs-act]").forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const cid = b.dataset.cid;
+    const act = b.dataset.csAct;
+    const row = conversations.get(cid);
+    if (row) doAction(act, row).catch(err => console.warn("[callstrip]", act, err));
+  });
 }
 
 function renderQueueActionBar() {
@@ -2843,9 +2889,9 @@ function renderQueueActionBar() {
   el("queueActionBarConference").onclick = () => conferenceSelectedQueueCalls();
 }
 
-// Pull every selected queue interaction onto the current user, then merge them
-// all into a single conference. Mirrors the "assign + merge" flow in the merge
-// modal (line ~2905), but driven from the queue-view multi-select.
+// Pull every selected queue interaction onto the current user, then
+// merge them all into a single conference. Drives mergeQueueCallsViaSdk
+// (the SDK-backed merge) from the queue-view multi-select.
 async function conferenceSelectedQueueCalls() {
   const ids = [...queueViewSelectedIds];
   if (ids.length < 2) return;
@@ -2853,75 +2899,23 @@ async function conferenceSelectedQueueCalls() {
     showBanner({ type: "error", title: "Not signed in", message: "Cannot conference without a current user.", autoHideMs: 4000 });
     return;
   }
-  const ok = confirm(`Conference ${ids.length} selected interactions?\n\nEach call will be assigned to you, then merged into a single conference.`);
+  const ok = confirm(`Conference ${ids.length} selected interactions?\n\nEach call will be assigned to you and merged into a single conference. Audio will be in this dashboard tab.`);
   if (!ok) return;
 
   const btn = el("queueActionBarConference");
   if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
   try {
-    const toAssign = ids.filter(id => {
-      const r = conversations.get(id);
-      return r && !r.hasMe && !r.disconnected;
+    const result = await mergeQueueCallsViaSdk(ids);
+    showBanner({
+      type: result.failed.length ? "warn" : "info",
+      title: "Conference requested",
+      message: `Merging ${result.merged} calls.${result.failed.length ? ` ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}` : ""}`,
+      autoHideMs: 4000
     });
-    // Pre-check: surface a clear reason if the assign would fail.
-    for (const id of toAssign) {
-      const why = assignEligibilityError(id);
-      if (why) {
-        showBanner({ type: "error", title: "Can't assign call", message: why, autoHideMs: 7000 });
-        return;
-      }
-    }
-    // Toggle voice acdAutoAnswer on for the duration of the merge so
-    // /assign-driven alerts pick up automatically (no NOT_RESPONDING).
-    // Restored to prior value in finally inside withAutoAnswerVoice.
-    // Refresh /api/v2/conversations BEFORE deciding what to assign so we
-    // don't try to /assign a call we already own (cache lag).
-    try { await seedMyInteractions(); } catch {}
-    await withAutoAnswerVoice(async () => {
-      // Fire /assigns rapidly WITHOUT waiting between them. Each /assign
-      // just submits the conversation to the routing engine; the engine
-      // then alerts the user sequentially. If we waited for one to land
-      // before issuing the next, the user would already be INTERACTING
-      // and GC refuses /assign on an INTERACTING user. IW-Merge works
-      // because it fires /assigns rapidly, then waits 3s and reloads.
-      const assignFailed = [];
-      for (const id of toAssign) {
-        const conv = conversations.get(id);
-        if (conv?.hasMe && !conv.disconnected) continue;
-        if (!(await isCallStillActive(id))) {
-          showBanner({ type: "warn", title: "Call ended", message: `${(conv?.name || id)}: hung up before merge`, autoHideMs: 4000 });
-          continue;
-        }
-        try { await assignCallToMe(id); }
-        catch (e) {
-          const reason = await explainAssignFailure(id, e.message);
-          assignFailed.push({ id, reason });
-        }
-      }
-      if (assignFailed.length) {
-        for (const f of assignFailed) {
-          const cName = conversations.get(f.id)?.name || f.id;
-          showBanner({ type: "error", title: "Assign failed", message: `${cName}: ${f.reason}`, autoHideMs: 5000 });
-        }
-      }
-      // Final refresh just to settle the cache before merging.
-      if (toAssign.length > 0) {
-        await new Promise(r => setTimeout(r, 500));
-        await seedMyInteractions();
-      }
-      const myIds = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).map(r => r.id);
-      const finalIds = [...new Set(myIds)];
-      if (finalIds.length < 2) {
-        showBanner({ type: "warn", title: "Nothing to merge", message: "No active calls of yours after assignment.", autoHideMs: 4000 });
-        return;
-      }
-      await mergeMany(finalIds);
-      showBanner({ type: "info", title: "Conference requested", message: `Merging ${finalIds.length} calls.`, autoHideMs: 3000 });
-      queueViewSelectedIds.clear();
-      renderAll();
-    });
+    queueViewSelectedIds.clear();
+    renderAll();
   } catch (e) {
-    showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 5000 });
+    showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 6000 });
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Conference"; }
   }
@@ -3069,12 +3063,6 @@ async function doAction(act, row) {
   try {
     if (act === "makeCall") { openOutboundModal(); return; }
     if (act === "settings") { openSettings(); return; }
-    if (act === "popout") {
-      // In the popout window, the same button pops back in.
-      if (isPopoutMode()) window.close();
-      else triggerPopout();
-      return;
-    }
     if (act === "wrapup") { openWrapupModal(row); return; }
     if (act === "transfer") { openTransferModal(row); return; }
     if (act === "consult") { openConsultModal(row); return; }
@@ -3092,25 +3080,56 @@ async function doAction(act, row) {
 
     switch (act) {
       case "answer":
-        if (!myPartId) throw new Error("No participant to answer on");
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "connected" } });
+        // SDK path: if we have a pendingSession (not yet auto-accepted)
+        // call acceptSession; otherwise PATCH state=connected (legacy).
+        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+          await gcSdk.acceptSession({ conversationId: convId, audioElement: el("gcSdkAudio") });
+        } else {
+          if (!myPartId) throw new Error("No participant to answer on");
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "connected" } });
+        }
         break;
       case "hold":
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: !row.held } });
+        if (gcSdkReady && sdkHasSession(convId)) {
+          await gcSdk.setHold({ conversationId: convId, hold: !row.held });
+          const s = gcSdkSessions.get(convId); if (s) s.hold = !row.held;
+        } else {
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: !row.held } });
+        }
         break;
-      case "mute":
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { muted: true } });
+      case "mute": {
+        if (gcSdkReady && sdkHasSession(convId)) {
+          const cur = sdkSessionMuted(convId);
+          await gcSdk.setMute({ conversationId: convId, mute: !cur });
+          const s = gcSdkSessions.get(convId); if (s) s.mute = !cur;
+          renderInlineCallStrip();
+        } else {
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { muted: !row.muted } });
+        }
         break;
+      }
       case "private":
         await apiFetch(`/api/v2/conversations/calls/${convId}/recordingstate`, { method: "PATCH", body: { state: row.recording ? "paused" : "none", secured: true } });
         break;
       case "disconnect":
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
+        if (gcSdkReady && sdkHasSession(convId)) {
+          await gcSdk.endSession({ conversationId: convId, reason: "success" });
+        } else {
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
+        }
         break;
       case "pickup": {
-        const target = (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
-        if (!target) throw new Error("No pickup-eligible participant");
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, { method: "POST", body: { userId: currentUser.id, voicemail: false } });
+        // Unified pickup — uses the same /replace/agent Attended path as
+        // the merge flow. SDK auto-accepts the resulting pendingSession
+        // event when the SDK is up; otherwise the call rings the user's
+        // station (GC client tab) the legacy way.
+        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+          await gcSdk.acceptSession({ conversationId: convId, audioElement: el("gcSdkAudio") });
+          break;
+        }
+        const why = assignEligibilityError(convId);
+        if (why) throw new Error(why);
+        await assignCallToMe(convId);
         break;
       }
       case "listen":
@@ -3446,69 +3465,26 @@ function openMergeModal(row) {
   el("mergeGo").onclick = async () => {
     const status = el("mergeStatus");
     try {
-      // Pre-check: surface a clear reason if the assign would fail.
-      if (queuedSel.size > 0) {
-        for (const qid of queuedSel) {
-          const why = assignEligibilityError(qid);
-          if (why) {
-            status.textContent = why;
-            showBanner({ type: "error", title: "Can't assign call", message: why, autoHideMs: 7000 });
-            return;
-          }
-        }
+      const ids = [...new Set([...sel, ...queuedSel])];
+      if (ids.length < 2) {
+        status.textContent = "Pick at least 2 calls to merge.";
+        return;
       }
-      // Toggle voice acdAutoAnswer on for the duration of the merge so
-      // /assign-driven alerts pick up automatically. Restored to prior
-      // value in finally inside withAutoAnswerVoice.
-      // Refresh /api/v2/conversations so we don't try to assign a call
-      // we already own (cache lag from earlier merge attempt).
-      try { await seedMyInteractions(); } catch {}
-      await withAutoAnswerVoice(async () => {
-        const assignFailed = [];
-        if (queuedSel.size > 0) {
-          status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
-          // Fire /assigns rapidly without waiting between them — same
-          // pattern as IW-Merge. The routing engine handles sequential
-          // alerting + auto-answer.
-          for (const qid of queuedSel) {
-            const conv = conversations.get(qid);
-            if (conv?.hasMe && !conv.disconnected) continue;
-            if (!(await isCallStillActive(qid))) {
-              assignFailed.push({ id: qid, err: "call hung up before merge" });
-              continue;
-            }
-            try { await assignCallToMe(qid); }
-            catch (e) { assignFailed.push({ id: qid, err: await explainAssignFailure(qid, e.message) }); }
-          }
-          status.textContent = `Waiting for calls to deliver…`;
-          // Single wait at the end for routing engine to deliver +
-          // auto-answer all the assigned calls.
-          await new Promise(r => setTimeout(r, 4000));
-        }
-        // Re-fetch from /api/v2/conversations — only ids the API now
-        // reports as ours are eligible to merge (mirrors IW-Merge).
-        status.textContent = "Refreshing active calls…";
-        await seedMyInteractions();
-        const myIds = [...conversations.values()]
-          .filter(r => r.hasMe && !r.disconnected)
-          .map(r => r.id);
-        const ids = [...new Set([...sel, ...myIds])];
-        if (ids.length < 2) {
-          const why = assignFailed.length
-            ? `Not enough calls. Assign failures: ${assignFailed.map(f => f.err).join('; ')}`
-            : "Not enough calls to merge after assignment.";
-          status.textContent = why;
-          showBanner({ type: "error", title: "Merge failed", message: why, autoHideMs: 6000 });
-          return;
-        }
-        status.textContent = `Merging ${ids.length} calls…`;
-        await mergeMany(ids);
-        showBanner({ type: "info", title: "Merge requested", message: `Conferenced ${ids.length} calls.`, autoHideMs: 3000 });
-        closeModal("mergeModal");
+      status.textContent = `Merging ${ids.length} calls…`;
+      const result = await mergeQueueCallsViaSdk(ids);
+      const note = result.failed.length
+        ? ` ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}`
+        : "";
+      showBanner({
+        type: result.failed.length ? "warn" : "info",
+        title: "Merge requested",
+        message: `Conferenced ${result.merged} calls.${note}`,
+        autoHideMs: 4000
       });
+      closeModal("mergeModal");
     } catch (e) {
       status.textContent = `Merge failed: ${e.message}`;
-      showBanner({ type: "error", title: "Merge failed", message: e.message, autoHideMs: 5000 });
+      showBanner({ type: "error", title: "Merge failed", message: e.message, autoHideMs: 6000 });
     }
   };
 }
@@ -3989,11 +3965,6 @@ function handleMenuCmd(cmd) {
     case "toggleDirectory": toggleDir(); break;
     case "customizeCols": openColsModal(); break;
     case "reload": location.reload(); break;
-    case "popout": triggerPopout(); break;
-    case "popin":
-      if (isPopoutMode()) window.close();
-      else if (broadcastChannel) broadcastChannel.postMessage("popin-requested");
-      break;
     case "about": showBanner({ type: "info", title: "UVA Dashboard", message: "Genesys Cloud queue view — PureConnect parity build", autoHideMs: 4000 }); break;
   }
 }
@@ -4457,25 +4428,88 @@ async function mergeMany(convIds) {
   return target;
 }
 
-// After /assign, GC routes the call to the user's station. We need to
-// wait for the user to actually become a participant (hasMe=true) before
-// firing the next /assign — GC refuses concurrent assigns while the
-// user is alerting. Polls /api/v2/conversations every 600ms up to the
-// timeout. Returns true if the call landed as ours, false on timeout.
-async function waitForCallToBeMine(convId, timeoutMs = 8000) {
+// Wait until a call has landed as the user's. Accepts EITHER signal as
+// readiness: SDK reports a media session for the conv (gcSdkSessions),
+// OR /api/v2/conversations reports the user as a participant
+// (conversations[convId].hasMe). Whichever wins. Polls at 250ms.
+async function waitForCallReady(convId, timeoutMs = 8000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (sdkHasSession(convId)) return true;
     const r = conversations.get(convId);
     if (r && r.hasMe && !r.disconnected) return true;
-    await new Promise(res => setTimeout(res, 600));
-    try { await seedMyInteractions(); } catch {}
+    await new Promise(res => setTimeout(res, 250));
   }
   return false;
 }
 
-// Put one of OUR calls on hold (or unhold). Needed before /assign'ing
-// a second queue call — GC refuses to start alerting another call
-// while we're INTERACTING. Holding the current call frees us up.
+// SDK-backed merge of N queue calls. Rapid /replace/agent Attended for
+// each (mirrors IW-Merge's pattern), SDK auto-accepts pendingSession
+// events client-side, then PATCH /conference at the end.
+//
+// No acdAutoAnswer toggle, no NOT_RESPONDING reset, no hold-then-assign
+// gymnastics — autoConnectSessions:true on the SDK constructor handles
+// it all client-side.
+async function mergeQueueCallsViaSdk(ids) {
+  if (!currentUser?.id) throw new Error("No current user");
+  if (!ids || ids.length < 2) throw new Error("Need 2+ calls to conference");
+
+  // 1. Refresh from API so we don't try to assign a call we already own
+  try { await seedMyInteractions(); } catch {}
+  const toAssign = ids.filter(id => {
+    const r = conversations.get(id);
+    return r && !r.hasMe && !r.disconnected;
+  });
+
+  // 2. Pre-flight eligibility (station present, signed in)
+  for (const id of toAssign) {
+    const why = assignEligibilityError(id);
+    if (why) throw new Error(why);
+  }
+
+  // 3. Fire /replace/agent Attended in rapid succession (no waiting
+  //    between — SDK handles concurrent pendingSession events natively).
+  const failed = [];
+  for (const id of toAssign) {
+    if (!(await isCallStillActive(id))) {
+      failed.push({ id, err: "call hung up before merge" });
+      continue;
+    }
+    try { await assignCallToMe(id); }
+    catch (e) { failed.push({ id, err: await explainAssignFailure(id, e.message) }); }
+  }
+
+  // 4. Wait for each call to land as ours (SDK session OR conversations.hasMe)
+  await Promise.all(toAssign.map(id => waitForCallReady(id, 8000)));
+
+  // 5. Settle cache + build merge target list
+  await new Promise(r => setTimeout(r, 400));
+  await seedMyInteractions();
+  const myIds = [...conversations.values()]
+    .filter(r => r.hasMe && !r.disconnected)
+    .map(r => r.id);
+  const finalIds = [...new Set([...ids, ...myIds])]
+    .filter(id => conversations.get(id)?.hasMe);
+  if (finalIds.length < 2) {
+    const note = failed.length ? ` (${failed.map(f => f.err).join("; ")})` : "";
+    throw new Error(`Not enough calls to conference after assignment${note}`);
+  }
+
+  // 6. Merge.
+  await mergeMany(finalIds);
+
+  // 7. Unhold any held SDK sessions so the conference is live for everyone.
+  if (gcSdkReady) {
+    for (const cid of finalIds) {
+      if (sdkSessionHeld(cid)) {
+        try { await gcSdk.setHold({ conversationId: cid, hold: false }); } catch {}
+      }
+    }
+  }
+  return { merged: finalIds.length, failed };
+}
+
+// Put one of OUR calls on hold (or unhold).
 async function holdMyCall(convId, held = true) {
   const conv = conversations.get(convId);
   if (!conv) return;
@@ -4488,16 +4522,6 @@ async function holdMyCall(convId, held = true) {
       body: { held: !!held }
     });
   } catch (e) { console.warn(`hold ${convId} failed`, e); }
-}
-
-// Hold every active call we're on EXCEPT the one we're about to act on.
-// Used before each serialized /assign so GC accepts the next alert.
-async function holdAllOtherActiveCalls(exceptConvId) {
-  const targets = [...conversations.values()].filter(r =>
-    r.hasMe && !r.disconnected && !r.held && r.id !== exceptConvId);
-  for (const r of targets) {
-    await holdMyCall(r.id, true);
-  }
 }
 
 // Make the current user a participant on a queue call.
@@ -4522,13 +4546,7 @@ async function assignCallToMe(convId) {
   const conv = await apiFetch(`/api/v2/conversations/calls/${convId}`);
   const target = (conv?.participants || []).find(p =>
     (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
-  if (!target) {
-    // Nothing live to replace — fall back to /assign so we still try.
-    await apiFetch(`/api/v2/conversations/${convId}/assign`, {
-      method: "POST", body: { userId: currentUser.id }
-    });
-    return;
-  }
+  if (!target) throw new Error("No active ACD/agent participant to replace — call may have already disconnected.");
   await apiFetch(`/api/v2/conversations/${convId}/participants/${target.id}/replace/agent`, {
     method: "POST",
     body: { userId: currentUser.id, transferType: "Attended", voicemail: false }
@@ -4567,65 +4585,6 @@ async function explainAssignFailure(convId, originalError) {
   } catch { return originalError; }
 }
 
-// Prepare the agent for a merge: clear NOT_RESPONDING (which blocks
-// /assign) and turn on voice acdAutoAnswer so each /assign'd call
-// auto-picks-up.
-//
-// Three GC API moves, each verified in swagger.json:
-//   1. PUT  /api/v2/users/{id}/routingstatus  body {status:"IDLE"}
-//        → no perm required; clears NOT_RESPONDING. Valid enum:
-//          OFF_QUEUE / IDLE / INTERACTING / NOT_RESPONDING / COMMUNICATING.
-//   2. GET  /api/v2/users/{id}                 → read acdAutoAnswer + version
-//   3. PATCH /api/v2/users/{id}  body {acdAutoAnswer:true, version:N}
-//        → perm directory:user:edit; UpdateUser schema requires version.
-//
-// /agentui/agents/autoanswer/{id}/settings is digital-channels only —
-// 'voice'/'call' rejected. Don't use it for this.
-//
-// Restores acdAutoAnswer to the prior value in finally. routingStatus
-// isn't restored: once the merge starts, real call activity drives it
-// into INTERACTING anyway, and IDLE was the state the user wanted.
-async function withMergeReady(action) {
-  if (!currentUser?.id) return action();
-  const userUrl = `/api/v2/users/${currentUser.id}`;
-  const rsUrl   = `/api/v2/users/${currentUser.id}/routingstatus`;
-  // Read prior state first so we can restore acdAutoAnswer cleanly.
-  let priorAuto = false;
-  let priorVersion = null;
-  let wasNotResponding = false;
-  try {
-    const u = await apiFetch(userUrl + "?expand=routingStatus");
-    priorAuto = !!u?.acdAutoAnswer;
-    priorVersion = u?.version ?? null;
-    wasNotResponding = (u?.routingStatus?.status === "NOT_RESPONDING");
-  } catch (e) { console.warn("Failed to read user state", e); }
-  // Clear NOT_RESPONDING if set — /assign refuses NOT_RESPONDING agents.
-  if (wasNotResponding) {
-    try {
-      await apiFetch(rsUrl, { method: "PUT", body: { status: "IDLE" } });
-    } catch (e) { console.warn("Failed to clear NOT_RESPONDING", e); }
-  }
-  // Toggle voice auto-answer on for the merge duration.
-  let toggled = false;
-  try {
-    await apiFetch(userUrl, { method: "PATCH", body: { acdAutoAnswer: true, version: priorVersion } });
-    toggled = true;
-    return await action();
-  } finally {
-    if (toggled) {
-      try {
-        const u2 = await apiFetch(userUrl);
-        await apiFetch(userUrl, {
-          method: "PATCH",
-          body: { acdAutoAnswer: priorAuto, version: u2?.version ?? priorVersion }
-        });
-      } catch (e) { console.warn("Failed to restore acdAutoAnswer", e); }
-    }
-  }
-}
-// Backwards-compatible alias — older callers use withAutoAnswerVoice.
-const withAutoAnswerVoice = withMergeReady;
-
 // Light precheck only — we now use /replace for the assign step, which
 // requires conversation:communication:blindTransfer permission and a
 // station (for media), but does NOT care about routing status (it
@@ -4652,80 +4611,6 @@ async function addParticipantToCall(convId, phoneNumber, name) {
 async function createOutboundCall(phoneNumber, fromQueueId) {
   const body = fromQueueId ? { phoneNumber, callFromQueueId: fromQueueId } : { phoneNumber };
   return apiFetch("/api/v2/conversations/calls", { method: "POST", body });
-}
-
-// ================================================================
-//  Popout
-// ================================================================
-const POPOUT_KEY = "gc_uvad_popout_active";
-const POPOUT_CHANNEL = "gc_uvad_popout";
-let popoutWindow = null;
-let broadcastChannel = null;
-function isPopoutMode() { return new URLSearchParams(window.location.search).get("mode") === "popout"; }
-
-function initBroadcast() {
-  try {
-    broadcastChannel = new BroadcastChannel(POPOUT_CHANNEL);
-    broadcastChannel.onmessage = (e) => {
-      if (e.data === "popout-opened" && !isPopoutMode()) {
-        el("popoutPlaceholder").classList.add("active");
-        el("mainContent").style.display = "none";
-      } else if (e.data === "popout-closed" && !isPopoutMode()) {
-        el("popoutPlaceholder").classList.remove("active");
-        el("mainContent").style.display = "";
-      } else if (e.data === "popin-requested" && isPopoutMode()) {
-        window.close();
-      }
-    };
-  } catch {}
-}
-function buildPopoutUrl() {
-  const u = new URL(window.location.href);
-  u.searchParams.set("mode", "popout");
-  u.searchParams.delete("code"); u.searchParams.delete("state"); u.searchParams.delete("error");
-  return u.toString();
-}
-function triggerPopout() {
-  if (isPopoutMode()) { showBanner({ type: "info", title: "Already in pop-out window", autoHideMs: 2500 }); return; }
-  if (popoutWindow && !popoutWindow.closed) { popoutWindow.focus(); return; }
-  // Popout inherits the current token from main-window localStorage. The
-  // gc_uvad_popout_token keys exist for back-compat with older installs.
-  const tok = safeGet(STORAGE.token);
-  const exp = safeGet(STORAGE.tokenExpiresAt);
-  if (tok) localStorage.setItem("gc_uvad_popout_token", tok);
-  if (exp) localStorage.setItem("gc_uvad_popout_token_expires", exp);
-  popoutWindow = window.open(buildPopoutUrl(), "uvad_popout", "width=1200,height=800,menubar=no,toolbar=no,resizable=yes,scrollbars=yes");
-  localStorage.setItem(POPOUT_KEY, "true");
-  if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
-  el("popoutPlaceholder").classList.add("active"); el("mainContent").style.display = "none";
-  const poll = setInterval(() => {
-    if (popoutWindow && popoutWindow.closed) {
-      clearInterval(poll); popoutWindow = null;
-      localStorage.removeItem(POPOUT_KEY);
-      if (broadcastChannel) broadcastChannel.postMessage("popout-closed");
-      el("popoutPlaceholder").classList.remove("active"); el("mainContent").style.display = "";
-    }
-  }, 500);
-}
-
-function setupPopoutMode() {
-  const popToken = localStorage.getItem("gc_uvad_popout_token");
-  const popExp = localStorage.getItem("gc_uvad_popout_token_expires");
-  if (popToken && !safeGet(STORAGE.token)) {
-    safeSet(STORAGE.token, popToken);
-    if (popExp) safeSet(STORAGE.tokenExpiresAt, popExp);
-  }
-  if (broadcastChannel) broadcastChannel.postMessage("popout-opened");
-  // In the popout window, flip the Pop Out button to "Pop In" + arrow-in icon.
-  const btn = document.getElementById("popoutBtn");
-  if (btn) {
-    btn.title = "Pop back into the main window";
-    const lbl = btn.querySelector(".lbl");
-    if (lbl) lbl.textContent = "Pop In";
-    const svg = btn.querySelector("svg");
-    // Arrow-into-box icon — mirror of the pop-out icon.
-    if (svg) svg.innerHTML = '<path fill="none" stroke="#000" d="M14 2H7v2M7 2v5h7V2zM2 7V2h5l-2 2 4 4-1 1-4-4-2 2z"/>';
-  }
 }
 
 // ================================================================
@@ -5438,19 +5323,13 @@ function openStatusNoteEditor() {
 // ================================================================
 //  Genesys Cloud WebRTC SDK — bring audio into THIS tab
 // ================================================================
-// Phase 1: behind feature flag localStorage["gc_uvad_sdk"]==="on".
 // When the SDK is up, the dashboard tab IS the user's WebRTC station —
 // calls ring here directly, hold/mute/end act on the local RTP, and a
 // multi-call merge fires N /replace/agent Attended in rapid succession,
 // SDK auto-accepts each pendingSession, and one /conference PATCH at
 // the end ties them together. No bouncing to GC native client.
-function isSdkFeatureEnabled() {
-  try { return localStorage.getItem("gc_uvad_sdk") === "on"; } catch { return false; }
-}
-
 async function initWebrtcSdk() {
   if (gcSdk || gcSdkReady) return;
-  if (!isSdkFeatureEnabled()) { console.info("[gcSdk] feature flag off — skipping (set localStorage gc_uvad_sdk=on to enable)"); return; }
   if (!getToken() || !currentUser?.id) { console.info("[gcSdk] no token / user — skipping"); return; }
   // Only WebRTC-station users get the SDK. Deskphone / remote-phone users
   // already have audio at their own device; the SDK media path doesn't
@@ -5547,8 +5426,6 @@ async function init() {
   if (el("app-root").style.display !== "flex") return;
 
   loadSettings();
-  initBroadcast();
-  if (isPopoutMode()) setupPopoutMode();
 
   wireMenuBar();
   wireToolbar();
@@ -5565,11 +5442,6 @@ async function init() {
     el("rightCol").classList.add("collapsed");
     el("checkSidebar").textContent = "";
   }
-  el("popinFromPlaceholder").addEventListener("click", () => {
-    if (broadcastChannel) broadcastChannel.postMessage("popin-requested");
-    el("popoutPlaceholder").classList.remove("active");
-    el("mainContent").style.display = "";
-  });
 
   const url = new URL(window.location.href);
   const code = url.searchParams.get("code");
