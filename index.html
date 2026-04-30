@@ -3441,10 +3441,6 @@ async function doAction(act, row) {
 
     switch (act) {
       case "answer":
-        // SDK path: if we have a pendingSession (not yet auto-accepted)
-        // call acceptPendingSession with the propose-id sessionId STRING
-        // (SDK v6 internally does pendingSessions[t] — needs a string,
-        // not an object). audioElement is wired via SDK defaults.
         if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
           const sess = gcSdkSessions.get(convId);
           const sid = sess?.sessionId;
@@ -3452,6 +3448,13 @@ async function doAction(act, row) {
           if (accept && sid) {
             await accept(sid);
             stopSdkRingtone(convId);
+            // Seed the conversation into our Map so My Interactions
+            // displays it immediately — WS update with our connected
+            // agent participant can lag the SDK sessionStarted event.
+            try {
+              const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+              if (c?.id) { ingestConversation(c); renderAll(); }
+            } catch (e) { dlog.warn("doAction", "post-accept seed failed", { convId, msg: e.message }); }
           } else if (!sid) {
             throw new Error("SDK pending session has no id — try refreshing.");
           } else {
@@ -3463,15 +3466,22 @@ async function doAction(act, row) {
         }
         break;
       case "hold": {
-        // v6 SDK has no setHold on the SDK class — hold/resume are
-        // methods on the session object itself.
-        const sess = sdkGetSession(convId);
-        if (gcSdkReady && sess && typeof sess.hold === "function") {
-          if (row.held) await sess.resume(); else await sess.hold();
-          const s = gcSdkSessions.get(convId); if (s) s.hold = !row.held;
+        // Hold is a server-side conversation state, not a WebRTC media
+        // operation — REST PATCH on the agent participant is the
+        // canonical path. The SDK's session.hold() exists but the v6
+        // wrapper around it has been unreliable in practice. REST works
+        // for both WebRTC and non-WebRTC stations, so just use it.
+        if (!myPartId) {
+          // Try to resolve from the conversation directly in case the row
+          // hasn't been seeded yet.
+          const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+          const me = (c?.participants || []).filter(p => p.userId === currentUser?.id && !p.endTime).pop();
+          if (!me) throw new Error("No agent participant on this call to hold");
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${me.id}`, { method: "PATCH", body: { held: !row.held } });
         } else {
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: !row.held } });
         }
+        const s = gcSdkSessions.get(convId); if (s) s.hold = !row.held;
         break;
       }
       case "mute": {
@@ -5088,6 +5098,10 @@ async function mergeQueueCallsViaSdk(ids) {
         if (!sid) throw new Error("SDK pending session has no id");
         await accept(sid);
         stopSdkRingtone(anchorId);
+        try {
+          const c = await apiFetch(`/api/v2/conversations/calls/${anchorId}`);
+          if (c?.id) { ingestConversation(c); renderAll(); }
+        } catch {}
       } catch (e) {
         dlog.error("merge", "accept of existing pendingSession failed", { anchorId, sid, msg: e.message });
         throw new Error(`Couldn't accept the alert that's already ringing for this call: ${e.message}`);
@@ -5108,6 +5122,10 @@ async function mergeQueueCallsViaSdk(ids) {
           if (!accept || !sid) throw new Error("acceptPendingSession unavailable or no sid");
           await accept(sid);
           stopSdkRingtone(anchorId);
+          try {
+            const c = await apiFetch(`/api/v2/conversations/calls/${anchorId}`);
+            if (c?.id) { ingestConversation(c); renderAll(); }
+          } catch {}
         } catch (e) {
           dlog.error("merge", "fallback acceptPending failed after race", { anchorId, sid, msg: e.message });
           throw new Error(`Couldn't accept the alert that arrived during pickup: ${e.message}`);
@@ -6099,6 +6117,11 @@ function wireSdkEvents() {
     stopSdkRingtone(cid);
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
+    // Make sure My Interactions reflects the new active call within ~1s,
+    // even if the WS conversation update lags.
+    apiFetch(`/api/v2/conversations/calls/${cid}`).then(c => {
+      if (c?.id) { ingestConversation(c); renderAll(); }
+    }).catch(() => {});
   });
   gcSdk.on("sessionEnded", (sess, reason) => {
     dlog.info("gcSdk-evt", "sessionEnded", { conversationId: sess?.conversationId, sessionId: sess?.id, reason: reason?.condition || reason });
