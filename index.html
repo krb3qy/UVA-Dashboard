@@ -1439,6 +1439,18 @@ const sdkAutoAcceptIds = new Set();
 const sdkRingers = new Map();
 const sdkHasSession   = (cid) => gcSdkSessions.has(cid);
 const sdkSessionLive  = (cid) => !!gcSdkSessions.get(cid)?.hasMedia;
+
+// Resolve the live SDK session object for a conversation. Hold/mute/end
+// in v6 are methods on the session object itself, not on the SDK class
+// (no gcSdk.setMute / gcSdk.setHold). Returns null on miss.
+function sdkGetSession(cid) {
+  if (!gcSdkReady || !gcSdk?.sessionManager?.getSession) return null;
+  try { return gcSdk.sessionManager.getSession({ conversationId: cid }); }
+  catch (e) {
+    dlog.debug("gcSdk", "getSession miss", { cid, msg: e.message });
+    return null;
+  }
+}
 const sdkSessionMuted = (cid) => !!gcSdkSessions.get(cid)?.mute;
 const sdkSessionHeld  = (cid) => !!gcSdkSessions.get(cid)?.hold;
 // Tab-group model: each tab can hold 1..N queues with an optional name
@@ -3164,15 +3176,23 @@ function renderAll() {
 function renderInlineCallStrip() {
   const host = el("callStrip");
   if (!host) return;
-  // Union conversations(hasMe) with active SDK sessions. SDK is the
-  // source of truth for "audio is live in this tab" — keeps the strip
-  // mounted even if the WS briefly drops the conversation between
-  // pickup and merge events.
+  // Show calls where the conversations Map says we're active, OR where
+  // we have an SDK session AND we know the conversation. Orphaned SDK
+  // sessions (no conv in our map) are pruned — that's a stale entry,
+  // not a real call to render.
   const liveIds = new Set();
   for (const r of conversations.values()) {
     if (r.hasMe && !r.disconnected) liveIds.add(r.id);
   }
-  for (const cid of gcSdkSessions.keys()) liveIds.add(cid);
+  for (const cid of gcSdkSessions.keys()) {
+    if (conversations.has(cid)) liveIds.add(cid);
+    else {
+      // Stale SDK session for a conv we no longer track — drop it.
+      gcSdkSessions.delete(cid);
+      sdkAutoAcceptIds.delete(cid);
+      stopSdkRingtone(cid);
+    }
+  }
   if (liveIds.size === 0) {
     host.classList.remove("active");
     host.innerHTML = "";
@@ -3442,18 +3462,24 @@ async function doAction(act, row) {
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "connected" } });
         }
         break;
-      case "hold":
-        if (gcSdkReady && sdkHasSession(convId)) {
-          await gcSdk.setHold({ conversationId: convId, hold: !row.held });
+      case "hold": {
+        // v6 SDK has no setHold on the SDK class — hold/resume are
+        // methods on the session object itself.
+        const sess = sdkGetSession(convId);
+        if (gcSdkReady && sess && typeof sess.hold === "function") {
+          if (row.held) await sess.resume(); else await sess.hold();
           const s = gcSdkSessions.get(convId); if (s) s.hold = !row.held;
         } else {
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { held: !row.held } });
         }
         break;
+      }
       case "mute": {
-        if (gcSdkReady && sdkHasSession(convId)) {
+        // v6 SDK has no setMute — mute/unmute on session object.
+        const sess = sdkGetSession(convId);
+        if (gcSdkReady && sess && typeof sess.mute === "function") {
           const cur = sdkSessionMuted(convId);
-          await gcSdk.setMute({ conversationId: convId, mute: !cur });
+          if (cur) await sess.unmute(); else await sess.mute();
           const s = gcSdkSessions.get(convId); if (s) s.mute = !cur;
           renderInlineCallStrip();
         } else {
@@ -3464,10 +3490,26 @@ async function doAction(act, row) {
       case "private":
         await apiFetch(`/api/v2/conversations/calls/${convId}/recordingstate`, { method: "PATCH", body: { state: row.recording ? "paused" : "none", secured: true } });
         break;
-      case "disconnect":
-        if (gcSdkReady && sdkHasSession(convId)) {
+      case "disconnect": {
+        const sess = sdkGetSession(convId);
+        if (gcSdkReady && sess) {
           try {
-            await gcSdk.endSession({ conversationId: convId, reason: "success" });
+            // v6 endSession takes the session object; or the session itself
+            // exposes .end(reason). Try sessionManager.endSession first
+            // (preferred public path), fall back to session.end.
+            if (gcSdk.sessionManager?.endSession) {
+              await gcSdk.sessionManager.endSession(sess, "success");
+            } else if (typeof sess.end === "function") {
+              await sess.end("success");
+            } else {
+              throw new Error("No endSession path available on SDK");
+            }
+            // Optimistic cleanup — sessionEnded event will also fire and
+            // remove the entry, but we don't want to wait on it.
+            gcSdkSessions.delete(convId);
+            sdkAutoAcceptIds.delete(convId);
+            stopSdkRingtone(convId);
+            try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
           } catch (e) {
             if (/find session|no.*session|not.*found/i.test(e.message || "")) {
               dlog.warn("doAction", "endSession: SDK has no record, cleaning up locally", { convId, msg: e.message });
@@ -3479,11 +3521,20 @@ async function doAction(act, row) {
             }
             throw e;
           }
+        } else if (gcSdkReady && sdkHasSession(convId)) {
+          // We tracked a pendingSession but the SDK can't resolve it
+          // (already retracted server-side). Just clean up locally.
+          dlog.info("doAction", "no live SDK session — cleaning up local state", { convId });
+          gcSdkSessions.delete(convId);
+          sdkAutoAcceptIds.delete(convId);
           stopSdkRingtone(convId);
+          try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
         } else {
+          if (!myPartId) throw new Error("No participant to disconnect on");
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
         }
         break;
+      }
       case "pickup": {
         if (gcSdkReady && sdkHasSession(convId)) {
           const sess = gcSdkSessions.get(convId);
