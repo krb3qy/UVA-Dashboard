@@ -4402,36 +4402,42 @@ async function mergeMany(convIds) {
   return target;
 }
 
-// Assign a queue call to the current user (IW-Merge "assign & merge" first step)
+// Make the current user a participant on a queue call. Uses the SAME
+// /replace path the Pickup toolbar button uses — direct participant
+// swap, no routing/alert flow. Verified via SDK source:
+//   /assign  → goes through the routing/alert system; if the user
+//              doesn't answer the alert (because they're busy
+//              clicking Merge in the dashboard) GC marks them
+//              NOT_RESPONDING and the request fails.
+//   /replace → blind-transfer-style direct swap. User becomes a
+//              participant immediately. No alert timeout.
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
-  await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+  // Find an active ACD or alerting-agent participant to swap with our
+  // userId. This is the same target-finding logic as the Pickup action.
+  const conv = conversations.get(convId);
+  const target = (conv?.raw?.participants || []).find(p =>
+    (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
+  if (!target) {
+    // No live ACD/agent leg — fall back to /assign so we still try.
+    await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+    return;
+  }
+  await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${target.id}/replace`, {
+    method: "POST",
+    body: { userId: currentUser.id, voicemail: false }
+  });
 }
 
-// GC's /assign endpoint refuses with "Targeted User ID is not valid" when
-// the requester doesn't have an associated station, isn't on queue, or
-// isn't a member of the queue the call sits in. Pre-check those locally
-// so we surface a clear reason instead of throwing the raw 400.
-function assignEligibilityError(convId) {
+// Light precheck only — we now use /replace for the assign step, which
+// requires conversation:communication:blindTransfer permission and a
+// station (for media), but does NOT care about routing status (it
+// bypasses the routing/alert flow) and doesn't enforce queue membership
+// the same way /assign did. Keeps just the hard-blockers.
+function assignEligibilityError(_convId) {
   if (!currentUser?.id) return "Not signed in.";
   if (!currentUser.station) {
     return "You don't have an associated station. Pick one in the Genesys client (Settings ▸ Phone) and try again.";
-  }
-  const me = usersById.get(currentUser.id) || {};
-  const rs = (me.routingStatus || "").toUpperCase();
-  if (rs === "OFF_QUEUE" || rs === "") {
-    return "You're Off Queue. Switch to On Queue in the Genesys client to take queue calls.";
-  }
-  if (rs === "NOT_RESPONDING") {
-    return "You're Not Responding (a previous routed call wasn't answered). Toggle yourself On Queue in the Genesys client to reset to Idle, then retry.";
-  }
-  const conv = conversations.get(convId);
-  if (conv?.queueId) {
-    const members = queueMembers.get(conv.queueId);
-    if (members && !members.has(currentUser.id)) {
-      const qName = queuesById.get(conv.queueId)?.name || conv.queueId;
-      return `You're not a member of ${qName}, so the queue can't assign its calls to you.`;
-    }
   }
   return null;
 }
