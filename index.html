@@ -4478,6 +4478,87 @@ async function waitForCallReady(convId, timeoutMs = 12000) {
   return false;
 }
 
+// Pre-flight diagnostic for /assign. Reads fresh user state, fixes
+// recoverable conditions (NOT_RESPONDING / OFF_QUEUE → IDLE), and
+// throws a specific actionable error for non-recoverable ones (no
+// station, not a queue member). GC's /assign 400 with "Targeted User
+// ID is not valid" is generic — this turns it into a real diagnostic.
+async function ensureAssignReady(convId) {
+  // 1. Fresh user state — don't trust local cache here.
+  let u;
+  try {
+    u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=presence,routingStatus,station`);
+  } catch (e) {
+    throw new Error(`Couldn't read your user state: ${e.message}`);
+  }
+
+  // 2. Station check.
+  const station = u?.station?.associatedStation || u?.station?.effectiveStation || u?.station?.defaultStation;
+  if (!station?.id) {
+    throw new Error("You don't have an associated station. Pick one in your GC client (Settings ▸ Phone) and try again.");
+  }
+
+  // 3. Routing-status auto-fix.
+  //    /assign refuses anything other than IDLE on the agent — including
+  //    OFF_QUEUE (the cascade you can fall into after dismissed alerts).
+  //    INTERACTING means you have an active call; the anchor logic above
+  //    should have caught that path, but if not, surface a clear error.
+  const rs = u?.routingStatus?.status;
+  if (rs === "INTERACTING") {
+    throw new Error("You're INTERACTING (already on a call). Select that call as part of the merge or end it first.");
+  }
+  if (rs === "NOT_RESPONDING" || rs === "OFF_QUEUE" || rs === "COMMUNICATING") {
+    try {
+      await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
+        method: "PUT", body: { status: "IDLE" }
+      });
+    } catch (e) {
+      throw new Error(`Couldn't put you back on queue (was ${rs}). Click On Queue in your GC client and retry. (${e.message})`);
+    }
+    // The PUT is async server-side. Verify the flip landed before /assign
+    // races ahead — otherwise /assign sees the stale routing status and
+    // rejects with the generic "Targeted User ID is not valid" 400.
+    const flipDeadline = Date.now() + 5000;
+    while (Date.now() < flipDeadline) {
+      await new Promise(r => setTimeout(r, 250));
+      try {
+        const u2 = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
+        if (u2?.routingStatus?.status === "IDLE") break;
+      } catch {}
+    }
+  }
+
+  // 4. Queue-membership check. /assign for an ACD queue call requires
+  //    the user to be a member of the source queue. Without it, GC
+  //    returns the same generic "Targeted User ID is not valid" 400.
+  let queueId;
+  try {
+    const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+    const acd = (c?.participants || []).find(p => p.purpose === "acd" && !p.endTime);
+    queueId = acd?.queue?.id;
+  } catch {}
+  if (queueId) {
+    let isMember = false;
+    let pageReadFailed = false;
+    try {
+      // Page through queue members until we find currentUser or exhaust.
+      // m.id === m.user.id per fetchQueueMembers' verified pattern.
+      for (let page = 1; page <= 50 && !isMember; page++) {
+        const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&pageNumber=${page}`);
+        const entities = r?.entities || [];
+        if (entities.some(m => m.id === currentUser.id)) { isMember = true; break; }
+        if (entities.length < 100) break;
+      }
+    } catch (e) {
+      pageReadFailed = true;
+      console.warn("[merge] queue membership read failed", e);
+    }
+    if (!isMember && !pageReadFailed) {
+      throw new Error("You're not a member of the source queue. Add yourself to the queue (or have an admin do it) and retry.");
+    }
+  }
+}
+
 // SDK-backed merge of N queue calls.
 //
 // Architecture: pickup-one + conference-the-rest.
@@ -4527,15 +4608,10 @@ async function mergeQueueCallsViaSdk(ids) {
     if (!anchor) throw new Error("No pickup-able queue call in the selection.");
     anchorId = anchor.id;
 
-    // Reset NOT_RESPONDING if set — otherwise /assign rejects.
-    try {
-      const u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
-      if (u?.routingStatus?.status === "NOT_RESPONDING") {
-        await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
-          method: "PUT", body: { status: "IDLE" }
-        });
-      }
-    } catch (e) { console.warn("[merge] routingStatus precheck failed", e); }
+    // Pre-flight diagnostic: GC's /assign returns a vague "Targeted User
+    // ID is not valid" 400 for several distinct reasons. Auto-fix what
+    // we can; surface clear errors for the rest.
+    await ensureAssignReady(anchorId);
 
     if (!(await isCallStillActive(anchorId))) {
       throw new Error("Anchor queue call hung up before pickup.");
