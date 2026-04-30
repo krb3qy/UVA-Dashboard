@@ -2854,15 +2854,20 @@ async function conferenceSelectedQueueCalls() {
     // Toggle voice acdAutoAnswer on for the duration of the merge so
     // /assign-driven alerts pick up automatically (no NOT_RESPONDING).
     // Restored to prior value in finally inside withAutoAnswerVoice.
+    // Refresh /api/v2/conversations BEFORE deciding what to assign so we
+    // don't try to /assign a call we already own (cache lag).
+    try { await seedMyInteractions(); } catch {}
     await withAutoAnswerVoice(async () => {
-      // Serialize assigns — GC refuses to /assign a second call while
-      // the user is already alerting on a previous one. After each
-      // /assign, poll /api/v2/conversations until that conv shows up
-      // as ours (hasMe=true) or a short timeout elapses, THEN issue
-      // the next /assign. With acdAutoAnswer on the wait is typically
-      // 1-2 seconds.
+      // Serialize assigns. Before each /assign:
+      //  • hold any call we're already on (GC rejects /assign while
+      //    INTERACTING — the GC client does this hold transparently)
+      //  • wait for the new call to land as ours after auto-answer
       for (const id of toAssign) {
+        // Skip if we already became the participant (cache caught up).
+        const conv = conversations.get(id);
+        if (conv?.hasMe && !conv.disconnected) continue;
         try {
+          await holdAllOtherActiveCalls(id);
           await assignCallToMe(id);
           await waitForCallToBeMine(id, 8000);
         } catch (e) {
@@ -3425,17 +3430,23 @@ function openMergeModal(row) {
       // Toggle voice acdAutoAnswer on for the duration of the merge so
       // /assign-driven alerts pick up automatically. Restored to prior
       // value in finally inside withAutoAnswerVoice.
+      // Refresh /api/v2/conversations so we don't try to assign a call
+      // we already own (cache lag from earlier merge attempt).
+      try { await seedMyInteractions(); } catch {}
       await withAutoAnswerVoice(async () => {
         const assignFailed = [];
         if (queuedSel.size > 0) {
           status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
-          // Serialize assigns — GC refuses parallel /assign while one
-          // is alerting. Wait for each to land as ours before next.
+          // Serialize: before each /assign, hold any active calls so GC
+          // accepts the new alert.
           let i = 0;
           for (const qid of queuedSel) {
             i++;
             status.textContent = `Assigning call ${i}/${queuedSel.size}…`;
+            const conv = conversations.get(qid);
+            if (conv?.hasMe && !conv.disconnected) continue; // already ours
             try {
+              await holdAllOtherActiveCalls(qid);
               await assignCallToMe(qid);
               await waitForCallToBeMine(qid, 8000);
             } catch (e) { assignFailed.push({ id: qid, err: e.message }); }
@@ -4428,6 +4439,33 @@ async function waitForCallToBeMine(convId, timeoutMs = 8000) {
     try { await seedMyInteractions(); } catch {}
   }
   return false;
+}
+
+// Put one of OUR calls on hold (or unhold). Needed before /assign'ing
+// a second queue call — GC refuses to start alerting another call
+// while we're INTERACTING. Holding the current call frees us up.
+async function holdMyCall(convId, held = true) {
+  const conv = conversations.get(convId);
+  if (!conv) return;
+  const parts = conv.raw?.participants || [];
+  const myPart = [...parts].reverse().find(p => p.userId === currentUser?.id && !p.endTime);
+  if (!myPart) return;
+  try {
+    await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPart.id}`, {
+      method: "PATCH",
+      body: { held: !!held }
+    });
+  } catch (e) { console.warn(`hold ${convId} failed`, e); }
+}
+
+// Hold every active call we're on EXCEPT the one we're about to act on.
+// Used before each serialized /assign so GC accepts the next alert.
+async function holdAllOtherActiveCalls(exceptConvId) {
+  const targets = [...conversations.values()].filter(r =>
+    r.hasMe && !r.disconnected && !r.held && r.id !== exceptConvId);
+  for (const r of targets) {
+    await holdMyCall(r.id, true);
+  }
 }
 
 // Make the current user a participant on a queue call. Uses /assign
