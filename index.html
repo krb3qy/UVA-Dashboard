@@ -3582,18 +3582,39 @@ async function doAction(act, row) {
         break;
       }
       case "pickup": {
-        if (gcSdkReady && sdkHasSession(convId)) {
+        // If the SDK is already alerting us on this call, accept directly.
+        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
           const sess = gcSdkSessions.get(convId);
           const sid = sess?.sessionId;
           const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
           if (accept && sid) {
             await accept(sid);
             stopSdkRingtone(convId);
+            seedConvWithRetry(convId, 3, 700);
             break;
           }
         }
         const why = assignEligibilityError(convId);
         if (why) throw new Error(why);
+        // Auto-flip the user on queue if they're OFF_QUEUE / NOT_RESPONDING,
+        // verify station + queue membership. Without this, /assign 400s
+        // for an off-queue agent. Mirrors what the prior alert-extension
+        // pickup flow did (presence flip + assign).
+        await ensureAssignReady(convId);
+        // Re-check: if pendingSession arrived during ensureAssignReady
+        // (presence flip can route a queued call to us), accept that
+        // directly instead of /assign'ing.
+        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+          const sess = gcSdkSessions.get(convId);
+          const sid = sess?.sessionId;
+          const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
+          if (accept && sid) {
+            await accept(sid);
+            stopSdkRingtone(convId);
+            seedConvWithRetry(convId, 3, 700);
+            break;
+          }
+        }
         if (gcSdkReady) sdkAutoAcceptIds.add(convId);
         try { await assignCallToMe(convId); }
         catch (e) { sdkAutoAcceptIds.delete(convId); throw e; }
