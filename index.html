@@ -2064,7 +2064,8 @@ function ingestConversation(c, hintQueueId) {
     assignedUserId: resolvedUserId,
     assignedUserName: resolvedUserName,
     startTimeMs, queueEnterMs, stateChangeMs,
-    hasMe: parts.some(p => p.userId === currentUser?.id && !p.endTime),
+    hasMe: parts.some(p => (p.userId || p.user?.id) === currentUser?.id && !p.endTime)
+        || (gcSdkReady && gcSdkSessions.get(c.id)?.hasMedia === true),
     // GC distinguishes clean "disconnected" from error-paths like "terminated";
     // both mean the leg is over. Pruning only on "disconnected" let terminated
     // rows linger in the cache.
@@ -3202,7 +3203,14 @@ function renderInlineCallStrip() {
   host.innerHTML = [...liveIds].map(cid => {
     const r = conversations.get(cid) || { id: cid };
     const name = escape(r.name || r.number || r.id);
-    const cls = r.stateKey === "held" ? "held" :
+    // Read held state from BOTH the conversation's stateKey (driven by
+    // the WS update of participant.held) AND the SDK-tracked flag we
+    // set optimistically in doAction. The local flag flips instantly so
+    // the button reads "Unhold" immediately after a click without
+    // waiting on the WS round trip.
+    const sdkHeld = sdkSessionHeld(cid);
+    const isHeld = r.stateKey === "held" || sdkHeld;
+    const cls = isHeld ? "held" :
                 r.stateKey === "alerting" ? "alerting" : "";
     const audioMine = sdkSessionLive(cid);
     const audioPending = sdkHasSession(cid) && !audioMine;
@@ -3212,7 +3220,6 @@ function renderInlineCallStrip() {
         ? `<span class="cs-media-other" title="Connecting audio…">◐</span>`
         : `<span class="cs-media-other" title="Audio not in this tab">○</span>`;
     const isAlerting = r.stateKey === "alerting" || audioPending;
-    const isHeld = r.stateKey === "held";
     const muted = sdkSessionMuted(cid);
     const buttons = isAlerting
       ? `<button data-cs-act="answer" data-cid="${escape(cid)}">Answer</button>`
@@ -3463,9 +3470,6 @@ async function doAction(act, row) {
         }
         break;
       case "hold": {
-        // Resolve our participant id. Try the row first; if missing,
-        // fetch the conversation and match on userId across all common
-        // shapes (top-level userId or nested user.id, any purpose).
         let partId = myPartId;
         if (!partId) {
           const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
@@ -3479,8 +3483,21 @@ async function doAction(act, row) {
             throw new Error("No agent participant on this call to hold");
           }
         }
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}`, { method: "PATCH", body: { held: !row.held } });
-        const s = gcSdkSessions.get(convId); if (s) s.hold = !row.held;
+        // Read current held state from SDK record FIRST (we set it
+        // optimistically on every toggle so it stays accurate even when
+        // the WS conversation update hasn't landed yet). Fall back to
+        // the row.
+        const sessRec = gcSdkSessions.get(convId);
+        const currentlyHeld = sessRec?.hold ?? !!row.held;
+        const newHeld = !currentlyHeld;
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}`, { method: "PATCH", body: { held: newHeld } });
+        if (sessRec) sessRec.hold = newHeld;
+        if (row && conversations.has(convId)) {
+          row.held = newHeld;
+          if (newHeld) row.stateKey = "held";
+          else if (row.stateKey === "held") row.stateKey = "connected";
+        }
+        renderInlineCallStrip();
         break;
       }
       case "mute": {
