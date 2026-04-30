@@ -4480,15 +4480,39 @@ async function holdAllOtherActiveCalls(exceptConvId) {
   }
 }
 
-// Make the current user a participant on a queue call. Uses /assign
-// (the routing/alert path) — verified via SDK that /replace is blocked
-// for ACD calls with "An ACD call cannot be transferred unattended."
-// /assign requires the user's station to actually answer the alert; we
-// accomplish that by toggling acdAutoAnswer on for the duration of the
-// merge via withAutoAnswerVoice() in the caller.
+// Make the current user a participant on a queue call.
+//
+// Decision tree, verified against live state:
+//   /assign refuses INTERACTING agents (returns 'Targeted User ID is
+//   not valid'). So once the user has answered the first queue call,
+//   /assign on subsequent calls always fails.
+//
+//   /replace/agent (TransferToAgentRequest with transferType=Attended)
+//   alerts the target user the same way a normal queue route would —
+//   GC's client UI handles the "incoming alert while on another call"
+//   case (current call auto-holds, new alert appears). Works for both
+//   IDLE and INTERACTING agents. ACD calls require Attended transfer
+//   (Unattended is rejected by GC).
+//   Permissions: conversation:communication:blindTransfer +
+//                conversation:communication:blindTransferAgent
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
-  await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+  // Find the active ACD participant — the queue-side leg we're
+  // replacing with our user.
+  const conv = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+  const target = (conv?.participants || []).find(p =>
+    (p.purpose === "acd" || p.purpose === "agent") && !p.endTime);
+  if (!target) {
+    // Nothing live to replace — fall back to /assign so we still try.
+    await apiFetch(`/api/v2/conversations/${convId}/assign`, {
+      method: "POST", body: { userId: currentUser.id }
+    });
+    return;
+  }
+  await apiFetch(`/api/v2/conversations/${convId}/participants/${target.id}/replace/agent`, {
+    method: "POST",
+    body: { userId: currentUser.id, transferType: "Attended", voicemail: false }
+  });
 }
 
 // Pre-flight check before /assign — fetch the conversation directly
