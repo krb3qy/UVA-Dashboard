@@ -369,6 +369,50 @@
     .callstrip button.danger:hover { background: #c00000; color: #fff; }
     @keyframes cs-pulse { 50% { background: #ffe8a0; } }
 
+    /* -------- Dev panel (gated) -------- */
+    .dev-icon { position: fixed; bottom: 12px; right: 12px; width: 32px; height: 32px;
+      background: #1f1f24; color: #9cdcfe; border: 1px solid #444;
+      border-radius: 50%; display: none; align-items: center; justify-content: center;
+      cursor: pointer; font: 600 11px monospace; z-index: 990;
+      box-shadow: 0 2px 6px rgba(0,0,0,.4); user-select: none; }
+    .dev-icon.active { display: flex; }
+    .dev-icon:hover { background: #2a2a30; color: #fff; }
+    .dev-icon.has-errors { background: #6b1f1f; color: #ffb3b3; animation: dev-pulse 1.6s infinite; }
+    @keyframes dev-pulse { 50% { box-shadow: 0 0 0 6px rgba(255,80,80,.25); } }
+
+    .dev-panel { position: fixed; inset: 5%; z-index: 991; background: #16161a;
+      color: #d0d0d0; border: 1px solid #444; box-shadow: 0 8px 30px rgba(0,0,0,.6);
+      display: none; flex-direction: column; font: 12px/1.4 ui-monospace, Consolas, monospace; }
+    .dev-panel.active { display: flex; }
+    .dev-panel-header { background: #222; padding: 6px 10px; border-bottom: 1px solid #444;
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .dev-panel-header h3 { margin: 0; font-size: 13px; color: #fff; }
+    .dev-panel-header .sp { flex: 1; }
+    .dev-panel-header button, .dev-panel-header select {
+      background: #2a2a30; color: #d0d0d0; border: 1px solid #555; padding: 2px 8px;
+      font: inherit; font-size: 11px; cursor: pointer; border-radius: 2px; }
+    .dev-panel-header button:hover { background: #3a3a40; }
+    .dev-panel-header .x { background: transparent; border: 0; font-size: 16px; padding: 0 4px; cursor: pointer; color: #aaa; }
+    .dev-panel-header .x:hover { color: #fff; }
+    .dev-panel-meta { padding: 4px 10px; font-size: 11px; color: #888; background: #1c1c20;
+      border-bottom: 1px solid #2a2a2e; flex-shrink: 0; }
+    .dev-log { flex: 1; overflow: auto; padding: 4px 8px; }
+    .dev-log .e { padding: 1px 0; white-space: pre-wrap; word-break: break-all; border-bottom: 1px solid #1f1f24; }
+    .dev-log .e .ts { color: #6a737d; margin-right: 6px; }
+    .dev-log .e .lvl { display: inline-block; width: 50px; margin-right: 6px; font-weight: 600; }
+    .dev-log .e .area { display: inline-block; min-width: 90px; color: #c8a; margin-right: 6px; }
+    .dev-log .e.lvl-info .lvl { color: #4ec9b0; }
+    .dev-log .e.lvl-warn { background: #2a210b; }
+    .dev-log .e.lvl-warn .lvl { color: #d7ba7d; }
+    .dev-log .e.lvl-error { background: #3a1414; }
+    .dev-log .e.lvl-error .lvl { color: #f48771; }
+    .dev-log .e.lvl-debug .lvl { color: #569cd6; }
+    .dev-log .e.lvl-success { background: #14271a; }
+    .dev-log .e.lvl-success .lvl { color: #6cc070; }
+    .dev-log .e .data { color: #9cdcfe; }
+    .dev-panel input.dev-filter { background: #1c1c20; color: #d0d0d0; border: 1px solid #444;
+      padding: 2px 6px; font: inherit; font-size: 11px; min-width: 160px; }
+
     /* Row drag preview */
     .drag-preview { position: fixed; background: #fff; border: 1px solid var(--win-accent);
       padding: 3px 8px; font-size: 11px; pointer-events: none; z-index: 900;
@@ -1074,10 +1118,245 @@
 <!-- WEBRTC SDK AUDIO SINK -->
 <audio id="gcSdkAudio" autoplay></audio>
 
+<!-- DEV PANEL (gated to specific user IDs) -->
+<div id="devIcon" class="dev-icon" title="Diagnostics (Alt+D)">&lt;/&gt;</div>
+<div id="devPanel" class="dev-panel">
+  <div class="dev-panel-header">
+    <h3>Diagnostics</h3>
+    <input class="dev-filter" id="devFilter" placeholder="filter (text or area)" />
+    <select id="devLevelFilter">
+      <option value="">all levels</option>
+      <option value="error">errors</option>
+      <option value="warn">warn+</option>
+      <option value="info">info+</option>
+    </select>
+    <button id="devCopyBtn">Copy</button>
+    <button id="devClearBtn">Clear</button>
+    <button id="devPauseBtn">Pause</button>
+    <span class="sp"></span>
+    <button class="x" id="devCloseBtn">✕</button>
+  </div>
+  <div class="dev-panel-meta" id="devMeta"></div>
+  <div class="dev-log" id="devLog"></div>
+</div>
+
 <!-- Genesys Cloud WebRTC SDK — brings call audio into this tab -->
 <script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js" crossorigin="anonymous"></script>
 
 <script>
+// ================================================================
+//  Dev panel — capture-everything diagnostic log, gated to specific
+//  GC user IDs. Mounts a floating bottom-right icon when currentUser.id
+//  matches one of DEV_USER_IDS. Click to open a full overlay log.
+//  ?dev=1 URL param auto-opens.
+// ================================================================
+const DEV_USER_IDS = new Set([
+  "368cb040-5592-4cf5-8658-a973230c67ee", // Alex Specha — krb3qy@uvahealth.org
+]);
+const DEV_LS_KEY = "gc_uvad_devlog";
+const DEV_MAX_MEM = 1000;
+const DEV_MAX_LS  = 500;
+const devLog = [];           // ring buffer of {t, level, area, msg, data?}
+let devPanelOpen = false;
+let devPaused = false;
+let devUnseenErrors = 0;
+
+(function loadDevLog() {
+  try {
+    const raw = localStorage.getItem(DEV_LS_KEY);
+    if (raw) for (const e of JSON.parse(raw)) devLog.push(e);
+  } catch {}
+})();
+
+function devSavePersist() {
+  try {
+    const tail = devLog.slice(-DEV_MAX_LS);
+    localStorage.setItem(DEV_LS_KEY, JSON.stringify(tail));
+  } catch {}
+}
+
+function dashLog(level, area, msg, data) {
+  if (devPaused) return;
+  const e = { t: Date.now(), level: level || "info", area: area || "", msg: String(msg || "") };
+  if (data !== undefined) {
+    try {
+      // Cap data size; deep-clone via JSON to drop functions/circulars
+      const s = JSON.stringify(data, (k, v) => {
+        if (v instanceof Error) return { name: v.name, message: v.message, stack: v.stack };
+        if (typeof v === "function") return "[fn]";
+        return v;
+      });
+      e.data = s.length > 4000 ? s.slice(0, 4000) + "…[truncated]" : s;
+    } catch (err) { e.data = "[unserializable]"; }
+  }
+  devLog.push(e);
+  if (devLog.length > DEV_MAX_MEM) devLog.shift();
+  devSavePersist();
+  if (level === "error") devUnseenErrors++;
+  // Also still print to console so DevTools is unaffected
+  const consoleFn = level === "error" ? console.error :
+                    level === "warn"  ? console.warn  :
+                    level === "debug" ? console.debug : console.info;
+  if (data !== undefined) consoleFn(`[${area}]`, msg, data);
+  else consoleFn(`[${area}]`, msg);
+  if (devPanelOpen) renderDevLogIncremental(e);
+  updateDevIcon();
+}
+
+// Convenience wrappers
+const dlog = {
+  info:    (a, m, d) => dashLog("info", a, m, d),
+  warn:    (a, m, d) => dashLog("warn", a, m, d),
+  error:   (a, m, d) => dashLog("error", a, m, d),
+  debug:   (a, m, d) => dashLog("debug", a, m, d),
+  success: (a, m, d) => dashLog("success", a, m, d),
+};
+
+// Capture native console.error/warn too — helps catch errors thrown
+// by libs (SDK, network) that don't go through dashLog directly.
+(function hookConsole() {
+  const origErr = console.error.bind(console);
+  const origWarn = console.warn.bind(console);
+  console.error = (...args) => {
+    origErr(...args);
+    // Don't recurse if this is a dashLog-originated console call.
+    try {
+      const head = String(args[0] ?? "");
+      if (/^\[/.test(head) && head.length < 50) return; // already from dashLog
+      const e = { t: Date.now(), level: "error", area: "console", msg: args.map(a => typeof a === "string" ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()).join(" ") };
+      devLog.push(e); if (devLog.length > DEV_MAX_MEM) devLog.shift();
+      devSavePersist(); devUnseenErrors++; updateDevIcon();
+      if (devPanelOpen) renderDevLogIncremental(e);
+    } catch {}
+  };
+  console.warn = (...args) => {
+    origWarn(...args);
+    try {
+      const head = String(args[0] ?? "");
+      if (/^\[/.test(head) && head.length < 50) return;
+      const e = { t: Date.now(), level: "warn", area: "console", msg: args.map(a => typeof a === "string" ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })()).join(" ") };
+      devLog.push(e); if (devLog.length > DEV_MAX_MEM) devLog.shift();
+      devSavePersist(); updateDevIcon();
+      if (devPanelOpen) renderDevLogIncremental(e);
+    } catch {}
+  };
+})();
+
+window.addEventListener("error", (ev) => {
+  dlog.error("window.error", ev.message || "(no msg)", { filename: ev.filename, lineno: ev.lineno, colno: ev.colno, stack: ev.error?.stack });
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  dlog.error("unhandledrejection", ev.reason?.message || String(ev.reason), { stack: ev.reason?.stack });
+});
+
+function fmtTs(t) {
+  const d = new Date(t);
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+function escDev(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function renderDevLogIncremental(e) {
+  const host = document.getElementById("devLog");
+  if (!host) return;
+  const filter = (document.getElementById("devFilter")?.value || "").toLowerCase();
+  const lvl = document.getElementById("devLevelFilter")?.value || "";
+  if (lvl === "error" && e.level !== "error") return;
+  if (lvl === "warn"  && !["warn","error"].includes(e.level)) return;
+  if (lvl === "info"  && e.level === "debug") return;
+  if (filter && !(`${e.area} ${e.msg} ${e.data || ""}`.toLowerCase().includes(filter))) return;
+  const stuck = host.scrollTop + host.clientHeight >= host.scrollHeight - 20;
+  host.insertAdjacentHTML("beforeend", devEntryHtml(e));
+  if (stuck) host.scrollTop = host.scrollHeight;
+}
+function devEntryHtml(e) {
+  const dataPart = e.data ? `<span class="data"> ${escDev(e.data)}</span>` : "";
+  return `<div class="e lvl-${escDev(e.level)}"><span class="ts">${fmtTs(e.t)}</span><span class="lvl">${escDev(e.level)}</span><span class="area">${escDev(e.area)}</span>${escDev(e.msg)}${dataPart}</div>`;
+}
+function renderDevLogFull() {
+  const host = document.getElementById("devLog");
+  if (!host) return;
+  const filter = (document.getElementById("devFilter")?.value || "").toLowerCase();
+  const lvl = document.getElementById("devLevelFilter")?.value || "";
+  const out = [];
+  for (const e of devLog) {
+    if (lvl === "error" && e.level !== "error") continue;
+    if (lvl === "warn"  && !["warn","error"].includes(e.level)) continue;
+    if (lvl === "info"  && e.level === "debug") continue;
+    if (filter && !(`${e.area} ${e.msg} ${e.data || ""}`.toLowerCase().includes(filter))) continue;
+    out.push(devEntryHtml(e));
+  }
+  host.innerHTML = out.join("");
+  host.scrollTop = host.scrollHeight;
+  const meta = document.getElementById("devMeta");
+  if (meta) {
+    meta.textContent = `entries: ${devLog.length} (showing ${out.length})  · paused: ${devPaused}  · href: ${location.href}`;
+  }
+}
+
+function openDevPanel() {
+  devPanelOpen = true;
+  devUnseenErrors = 0;
+  document.getElementById("devPanel").classList.add("active");
+  renderDevLogFull();
+  updateDevIcon();
+}
+function closeDevPanel() {
+  devPanelOpen = false;
+  document.getElementById("devPanel").classList.remove("active");
+}
+function updateDevIcon() {
+  const icon = document.getElementById("devIcon");
+  if (!icon) return;
+  if (devUnseenErrors > 0 && !devPanelOpen) icon.classList.add("has-errors");
+  else icon.classList.remove("has-errors");
+}
+
+function mountDevPanel() {
+  const userId = (typeof currentUser !== "undefined" && currentUser?.id) || null;
+  if (!userId || !DEV_USER_IDS.has(userId)) return;
+  const icon = document.getElementById("devIcon");
+  if (icon) icon.classList.add("active");
+  const params = new URLSearchParams(location.search);
+  if (params.get("dev") === "1") openDevPanel();
+}
+function wireDevPanel() {
+  const icon = document.getElementById("devIcon");
+  if (icon) icon.onclick = () => devPanelOpen ? closeDevPanel() : openDevPanel();
+  document.getElementById("devCloseBtn").onclick = closeDevPanel;
+  document.getElementById("devClearBtn").onclick = () => {
+    devLog.length = 0; devUnseenErrors = 0;
+    try { localStorage.removeItem(DEV_LS_KEY); } catch {}
+    renderDevLogFull(); updateDevIcon();
+  };
+  document.getElementById("devPauseBtn").onclick = (e) => {
+    devPaused = !devPaused; e.target.textContent = devPaused ? "Resume" : "Pause";
+    renderDevLogFull();
+  };
+  document.getElementById("devCopyBtn").onclick = async () => {
+    const dump = devLog.map(e => `${fmtTs(e.t)} [${e.level}] [${e.area}] ${e.msg}${e.data ? " " + e.data : ""}`).join("\n");
+    try { await navigator.clipboard.writeText(dump); } catch {
+      // Fallback: stuff into a textarea, select, copy
+      const ta = document.createElement("textarea");
+      ta.value = dump; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } finally { ta.remove(); }
+    }
+    e.target.textContent = "Copied"; setTimeout(() => e.target.textContent = "Copy", 1200);
+  };
+  document.getElementById("devFilter").oninput = renderDevLogFull;
+  document.getElementById("devLevelFilter").onchange = renderDevLogFull;
+  // Alt+D toggle
+  window.addEventListener("keydown", (e) => {
+    if (e.altKey && (e.key === "d" || e.key === "D")) {
+      e.preventDefault();
+      if (!DEV_USER_IDS.has((typeof currentUser !== "undefined" && currentUser?.id) || "")) return;
+      devPanelOpen ? closeDevPanel() : openDevPanel();
+    }
+  });
+}
+
+dlog.info("boot", "page loaded", { href: location.href, ua: navigator.userAgent });
+
 // ================================================================
 //  Security gate — standalone deployment (GH Pages / localhost / file)
 // ================================================================
@@ -1479,13 +1758,32 @@ async function redirectToGenesysLogin(reason = "") {
 async function apiFetch(path, { method = "GET", body = null } = {}) {
   const token = getToken();
   if (!token) { await redirectToGenesysLogin("Your session ended."); throw new Error("AUTH_REDIRECT"); }
-  const resp = await fetch(`${apiBase()}${path}`, {
-    method,
-    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  if (resp.status === 401) { await redirectToGenesysLogin(); throw new Error("AUTH_REDIRECT"); }
-  if (!resp.ok) throw new Error(`${method} ${path} → ${resp.status}: ${await resp.text()}`);
+  const t0 = performance.now();
+  let resp;
+  try {
+    resp = await fetch(`${apiBase()}${path}`, {
+      method,
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+  } catch (e) {
+    dlog.error("api", `${method} ${path} → network error: ${e.message}`, { ms: Math.round(performance.now() - t0) });
+    throw e;
+  }
+  const ms = Math.round(performance.now() - t0);
+  if (resp.status === 401) {
+    dlog.warn("api", `${method} ${path} → 401`, { ms });
+    await redirectToGenesysLogin(); throw new Error("AUTH_REDIRECT");
+  }
+  if (!resp.ok) {
+    const text = await resp.text();
+    dlog.error("api", `${method} ${path} → ${resp.status}`, { ms, body: text.slice(0, 800) });
+    throw new Error(`${method} ${path} → ${resp.status}: ${text}`);
+  }
+  // Only log non-trivial calls to avoid noise from polling — skip 200 GETs of
+  // analytics/observations and queue listings that fire every few seconds.
+  const noisy = method === "GET" && /(observations\/query|members|conversations\?|notifications\/channels)/.test(path);
+  if (!noisy) dlog.debug("api", `${method} ${path} → ${resp.status}`, { ms });
   if (resp.status === 204) return null;
   const ct = resp.headers.get("content-type") || "";
   return ct.includes("application/json") ? resp.json() : resp.text();
@@ -1501,11 +1799,18 @@ async function ensureChannel() {
   wsChannelUri = ch.connectUri;
   await new Promise((resolve, reject) => {
     ws = new WebSocket(wsChannelUri);
-    ws.onopen = () => { setStatus("Live", "ok"); resolve(); };
-    ws.onerror = (e) => { setStatus("WebSocket error", "err"); reject(e); };
-    ws.onclose = () => { setStatus("WS closed", "warn"); ws = null; wsChannelId = null; };
+    ws.onopen = () => { dlog.success("ws", "WebSocket open", { uri: wsChannelUri }); setStatus("Live", "ok"); resolve(); };
+    ws.onerror = (e) => { dlog.error("ws", "WebSocket error"); setStatus("WebSocket error", "err"); reject(e); };
+    ws.onclose = () => { dlog.warn("ws", "WebSocket closed"); setStatus("WS closed", "warn"); ws = null; wsChannelId = null; };
     ws.onmessage = (ev) => {
-      try { handleNotification(JSON.parse(ev.data)); } catch (err) { console.error("notif parse", err); }
+      try {
+        const msg = JSON.parse(ev.data);
+        // Log only the topic + a tiny summary to avoid drowning the panel
+        const topic = msg?.topicName || msg?.eventBody?.topicName || "(no topic)";
+        const eb = msg?.eventBody || {};
+        dlog.debug("ws", `notif ${topic}`, { id: eb.id, state: eb.state, callState: eb.callState, participantCount: eb.participants?.length });
+        handleNotification(msg);
+      } catch (err) { dlog.error("ws", "notif parse failed", { msg: err.message }); }
     };
   });
 }
@@ -4484,13 +4789,16 @@ async function waitForCallReady(convId, timeoutMs = 12000) {
 // station, not a queue member). GC's /assign 400 with "Targeted User
 // ID is not valid" is generic — this turns it into a real diagnostic.
 async function ensureAssignReady(convId) {
+  dlog.info("merge", "ensureAssignReady start", { convId });
   // 1. Fresh user state — don't trust local cache here.
   let u;
   try {
     u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=presence,routingStatus,station`);
   } catch (e) {
+    dlog.error("merge", "ensureAssignReady — couldn't read user state", { msg: e.message });
     throw new Error(`Couldn't read your user state: ${e.message}`);
   }
+  dlog.info("merge", "user state", { rs: u?.routingStatus?.status, presence: u?.presence?.presenceDefinition?.systemPresence, hasStation: !!u?.station?.associatedStation?.id });
 
   // 2. Station check.
   const station = u?.station?.associatedStation || u?.station?.effectiveStation || u?.station?.defaultStation;
@@ -4508,24 +4816,25 @@ async function ensureAssignReady(convId) {
     throw new Error("You're INTERACTING (already on a call). Select that call as part of the merge or end it first.");
   }
   if (rs === "NOT_RESPONDING" || rs === "OFF_QUEUE" || rs === "COMMUNICATING") {
+    dlog.warn("merge", `routing status is ${rs} — resetting to IDLE`);
     try {
       await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
         method: "PUT", body: { status: "IDLE" }
       });
     } catch (e) {
+      dlog.error("merge", "routingStatus reset failed", { from: rs, msg: e.message });
       throw new Error(`Couldn't put you back on queue (was ${rs}). Click On Queue in your GC client and retry. (${e.message})`);
     }
-    // The PUT is async server-side. Verify the flip landed before /assign
-    // races ahead — otherwise /assign sees the stale routing status and
-    // rejects with the generic "Targeted User ID is not valid" 400.
     const flipDeadline = Date.now() + 5000;
+    let landed = false;
     while (Date.now() < flipDeadline) {
       await new Promise(r => setTimeout(r, 250));
       try {
         const u2 = await apiFetch(`/api/v2/users/${currentUser.id}?expand=routingStatus`);
-        if (u2?.routingStatus?.status === "IDLE") break;
+        if (u2?.routingStatus?.status === "IDLE") { landed = true; break; }
       } catch {}
     }
+    dlog[landed ? "success" : "warn"]("merge", landed ? "routing status flipped to IDLE" : "routing status didn't flip in 5s");
   }
 
   // 4. Queue-membership check. /assign for an ACD queue call requires
@@ -4538,11 +4847,10 @@ async function ensureAssignReady(convId) {
     queueId = acd?.queue?.id;
   } catch {}
   if (queueId) {
+    dlog.info("merge", "checking queue membership", { queueId });
     let isMember = false;
     let pageReadFailed = false;
     try {
-      // Page through queue members until we find currentUser or exhaust.
-      // m.id === m.user.id per fetchQueueMembers' verified pattern.
       for (let page = 1; page <= 50 && !isMember; page++) {
         const r = await apiFetch(`/api/v2/routing/queues/${queueId}/members?pageSize=100&pageNumber=${page}`);
         const entities = r?.entities || [];
@@ -4551,12 +4859,17 @@ async function ensureAssignReady(convId) {
       }
     } catch (e) {
       pageReadFailed = true;
-      console.warn("[merge] queue membership read failed", e);
+      dlog.warn("merge", "queue membership read failed", { msg: e.message });
     }
     if (!isMember && !pageReadFailed) {
+      dlog.error("merge", "user is not a member of source queue", { queueId, userId: currentUser.id });
       throw new Error("You're not a member of the source queue. Add yourself to the queue (or have an admin do it) and retry.");
     }
+    dlog[isMember ? "success" : "warn"]("merge", isMember ? "queue membership confirmed" : "queue membership unverified (page-read failed)");
+  } else {
+    dlog.warn("merge", "no queueId on conversation — skipping membership check");
   }
+  dlog.success("merge", "ensureAssignReady passed");
 }
 
 // SDK-backed merge of N queue calls.
@@ -4576,6 +4889,7 @@ async function ensureAssignReady(convId) {
 // leg, NOT a pendingSession on the WebRTC station — that's why the
 // previous N-replace approach failed silently.
 async function mergeQueueCallsViaSdk(ids) {
+  dlog.info("merge", "mergeQueueCallsViaSdk start", { ids, count: ids?.length });
   if (!currentUser?.id) throw new Error("No current user");
   if (!ids || ids.length < 2) throw new Error("Need 2+ calls to conference");
 
@@ -4596,6 +4910,7 @@ async function mergeQueueCallsViaSdk(ids) {
   //    anchor: more time invested = less likely to hang up mid-merge.
   let anchorId = [...conversations.values()]
     .find(r => r.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held"))?.id;
+  dlog.info("merge", "anchor selection", { existingConnectedAnchor: anchorId || null });
 
   let anchorWasAssignedHere = false;
   if (!anchorId) {
@@ -4616,20 +4931,24 @@ async function mergeQueueCallsViaSdk(ids) {
     if (!(await isCallStillActive(anchorId))) {
       throw new Error("Anchor queue call hung up before pickup.");
     }
+    dlog.info("merge", "firing /assign on anchor", { anchorId });
     try { await assignCallToMe(anchorId); }
     catch (e) {
+      dlog.error("merge", "/assign failed", { anchorId, msg: e.message });
       throw new Error(await explainAssignFailure(anchorId, e.message));
     }
+    dlog.success("merge", "/assign returned ok");
     anchorWasAssignedHere = true;
   }
 
-  // 4. Wait for anchor to be CONNECTED. SDK's autoConnectSessions accepts
-  //    the pendingSession; once sessionStarted fires + participant.state
-  //    flips to "connected", we're good to conference.
   if (anchorWasAssignedHere) {
+    dlog.info("merge", "waiting for anchor to be connected", { anchorId });
     const ready = await waitForCallReady(anchorId, 12000);
-    if (!ready) throw new Error("Anchor call did not connect in time. Check WebRTC station / mic permissions.");
-    // Brief settle so server-side participant state stabilizes.
+    if (!ready) {
+      dlog.error("merge", "anchor did not connect within 12s", { anchorId, sdkSessions: [...gcSdkSessions.entries()].map(([k,v]) => ({cid: k, ...v})) });
+      throw new Error("Anchor call did not connect in time. Check WebRTC station / mic permissions.");
+    }
+    dlog.success("merge", "anchor connected", { anchorId });
     await new Promise(r => setTimeout(r, 800));
   }
 
@@ -4646,7 +4965,9 @@ async function mergeQueueCallsViaSdk(ids) {
   }
 
   // 6. PATCH /conference on the anchor; pulls the others' customer legs in.
+  dlog.info("merge", "PATCH /conference", { anchorId, conversationIds: toConference });
   await mergeMany([anchorId, ...toConference]);
+  dlog.success("merge", "conference complete", { merged: 1 + toConference.length });
 
   // 7. If the anchor SDK session was somehow held, unhold so the conference
   //    is live for everyone.
@@ -4682,10 +5003,12 @@ async function holdMyCall(convId, held = true) {
 // agent to be a participant on them.
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
+  dlog.info("assign", "POST /assign", { convId, userId: currentUser.id });
   await apiFetch(`/api/v2/conversations/${convId}/assign`, {
     method: "POST",
     body: { userId: currentUser.id }
   });
+  dlog.success("assign", "/assign accepted");
 }
 
 // Pre-flight check before /assign — fetch the conversation directly
@@ -5465,20 +5788,34 @@ function openStatusNoteEditor() {
 // the end ties them together. No bouncing to GC native client.
 async function initWebrtcSdk() {
   if (gcSdk || gcSdkReady) return;
-  if (!getToken() || !currentUser?.id) { console.info("[gcSdk] no token / user — skipping"); return; }
-  // Only WebRTC-station users get the SDK. Deskphone / remote-phone users
-  // already have audio at their own device; the SDK media path doesn't
-  // help them and would just cause confusion if init succeeded.
+  if (!getToken() || !currentUser?.id) {
+    dlog.warn("gcSdk", "skip init — no token or user");
+    return;
+  }
+  dlog.info("gcSdk", "init starting", { userId: currentUser.id, stationType: currentUser.stationType, station: currentUser.station });
+
+  // Mic permission probe so we know up-front whether autoplay-with-audio
+  // and getUserMedia will succeed once a pendingSession fires.
+  try {
+    if (navigator.permissions?.query) {
+      const p = await navigator.permissions.query({ name: "microphone" });
+      dlog.info("gcSdk", "mic permission", { state: p.state });
+    } else {
+      dlog.warn("gcSdk", "navigator.permissions.query unavailable");
+    }
+  } catch (e) { dlog.warn("gcSdk", "mic perm probe failed", { msg: e.message }); }
+
   const t = (currentUser.stationType || "").toLowerCase();
-  if (!t.includes("webrtc")) { console.info("[gcSdk] stationType is", currentUser.stationType, "— SDK skipped"); return; }
-  // Resolve the SDK constructor — the bundle exposes either
-  // window.GenesysCloudWebrtcSdk.GenesysCloudWebrtcSdk (namespaced) or
-  // window.GenesysCloudWebrtcSdk directly depending on bundle version.
+  if (!t.includes("webrtc")) {
+    dlog.warn("gcSdk", "stationType is not WebRTC — SDK init skipped", { stationType: currentUser.stationType });
+    return;
+  }
   const ns = window.GenesysCloudWebrtcSdk;
   const Ctor = (ns && ns.GenesysCloudWebrtcSdk) || ns || window.genesysCloudWebrtcSdk;
+  dlog.info("gcSdk", "bundle resolution", { hasNs: !!ns, ctorIs: typeof Ctor, keys: ns ? Object.keys(ns).slice(0, 10) : null });
   if (typeof Ctor !== "function") {
     gcSdkError = "WebRTC SDK bundle didn't expose a constructor";
-    console.error("[gcSdk]", gcSdkError, ns);
+    dlog.error("gcSdk", gcSdkError, { ns: ns ? Object.keys(ns) : null });
     showSdkUnavailableBanner(gcSdkError);
     return;
   }
@@ -5488,39 +5825,43 @@ async function initWebrtcSdk() {
       environment: CONFIG.environment,
       autoConnectSessions: true,
       defaults: { audioElement: el("gcSdkAudio") },
-      logLevel: "warn"
+      logLevel: "info"
     });
+    dlog.info("gcSdk", "constructor ok, wiring events");
     wireSdkEvents();
+    dlog.info("gcSdk", "calling sdk.initialize()");
     await gcSdk.initialize();
     gcSdkReady = true;
-    console.info("[gcSdk] ready");
+    dlog.success("gcSdk", "initialize complete");
     setStatus("Live", "ok");
     try {
       const concurrent = gcSdk.isConcurrentSoftphoneSessionsEnabled?.();
       const persistent = gcSdk.isPersistentConnectionEnabled?.();
-      console.info("[gcSdk] concurrent:", concurrent, "persistent:", persistent);
-    } catch {}
+      const station = gcSdk.station;
+      dlog.info("gcSdk", "capabilities", { concurrent, persistent, station });
+    } catch (e) { dlog.warn("gcSdk", "capability probe failed", { msg: e.message }); }
   } catch (e) {
     gcSdkError = e?.message || String(e);
     gcSdk = null;
-    console.error("[gcSdk] initialize failed:", e);
+    dlog.error("gcSdk", "initialize failed", { msg: gcSdkError, stack: e?.stack });
     showSdkUnavailableBanner(gcSdkError);
   }
 }
 
 function wireSdkEvents() {
-  if (!gcSdk || typeof gcSdk.on !== "function") return;
+  if (!gcSdk || typeof gcSdk.on !== "function") {
+    dlog.warn("gcSdk", "wireSdkEvents — gcSdk.on not a function", { hasGcSdk: !!gcSdk, onType: typeof gcSdk?.on });
+    return;
+  }
   gcSdk.on("pendingSession", (s) => {
-    console.info("[gcSdk] pendingSession", s?.conversationId, "auto?", s?.autoAnswer);
+    dlog.success("gcSdk-evt", "pendingSession", { conversationId: s?.conversationId, sessionId: s?.sessionId, autoAnswer: s?.autoAnswer, fromUserId: s?.fromUserId, fromJid: s?.fromJid });
     const cid = s?.conversationId; if (!cid) return;
     const cur = gcSdkSessions.get(cid) || {};
     gcSdkSessions.set(cid, { ...cur, sessionId: s.sessionId, pending: true, autoAnswer: !!s.autoAnswer });
-    // autoConnectSessions:true means the SDK auto-accepts. If we ever
-    // turn that off we'd call gcSdk.acceptPendingSession here.
     renderCallWidgets();
   });
   gcSdk.on("sessionStarted", (sess) => {
-    console.info("[gcSdk] sessionStarted", sess?.conversationId || sess?.id);
+    dlog.success("gcSdk-evt", "sessionStarted", { conversationId: sess?.conversationId, sessionId: sess?.id || sess?.sessionId, sessionType: sess?.sessionType });
     const cid = sess?.conversationId;
     if (!cid) return;
     const cur = gcSdkSessions.get(cid) || {};
@@ -5528,21 +5869,25 @@ function wireSdkEvents() {
     renderCallWidgets();
   });
   gcSdk.on("sessionEnded", (sess, reason) => {
-    console.info("[gcSdk] sessionEnded", sess?.conversationId || sess?.id, reason?.condition);
+    dlog.info("gcSdk-evt", "sessionEnded", { conversationId: sess?.conversationId, sessionId: sess?.id, reason: reason?.condition || reason });
     const cid = sess?.conversationId;
     if (cid) gcSdkSessions.delete(cid);
     renderCallWidgets();
   });
   gcSdk.on("station", (info) => {
-    console.info("[gcSdk] station", info);
+    dlog.info("gcSdk-evt", "station", { id: info?.id, name: info?.name, type: info?.type, status: info?.status });
     try { renderMyPresence(); } catch {}
   });
   gcSdk.on("error", (err) => {
-    console.warn("[gcSdk] error", err);
+    dlog.error("gcSdk-evt", "error", { msg: err?.message || String(err), fatal: !!err?.fatal });
     if (err?.fatal) showSdkUnavailableBanner(err?.message || "WebRTC SDK fatal error");
   });
+  gcSdk.on?.("connected", (c) => dlog.info("gcSdk-evt", "connected", c));
+  gcSdk.on?.("disconnected", (d) => dlog.warn("gcSdk-evt", "disconnected", d));
+  gcSdk.on?.("ready", () => dlog.success("gcSdk-evt", "ready"));
   gcSdk.on?.("trace", (level, msg) => {
-    if (level === "error") console.warn("[gcSdk-trace]", msg);
+    const lvl = level === "error" ? "error" : level === "warn" ? "warn" : "debug";
+    dlog[lvl]("gcSdk-trace", String(msg).slice(0, 200));
   });
 }
 
@@ -5561,6 +5906,7 @@ async function init() {
   if (el("app-root").style.display !== "flex") return;
 
   loadSettings();
+  wireDevPanel();
 
   wireMenuBar();
   wireToolbar();
@@ -5591,11 +5937,13 @@ async function init() {
 
     setStatus("Loading queues…");
     await fetchCurrentUser();
+    mountDevPanel();
+    dlog.info("user", "fetchCurrentUser ok", { id: currentUser?.id, name: currentUser?.name, station: currentUser?.station, stationType: currentUser?.stationType });
     fetchMyRoles().then(() => applyRoleVisibility());
-    // Phase 1 WebRTC SDK boot — non-blocking; gated on feature flag and
-    // stationType=webrtc inside initWebrtcSdk(). Failures show a banner
-    // and the legacy REST path keeps working.
-    initWebrtcSdk().catch(e => console.warn("[gcSdk] init bg error", e));
+    // WebRTC SDK boot — non-blocking; gated on stationType=webrtc inside
+    // initWebrtcSdk(). Failures show a banner and the legacy REST path
+    // keeps working.
+    initWebrtcSdk().catch(e => dlog.error("gcSdk", "init bg error", { msg: e.message, stack: e.stack }));
     // Fetch all queue names up front so tabs render names (not ids) on first paint.
     fetchAllQueues().then(() => { renderAll(); renderTabGroupsSection(); }).catch((e) => console.warn("fetchAllQueues", e));
     fetchAllDivisions().catch(() => {});
