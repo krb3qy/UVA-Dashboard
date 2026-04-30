@@ -2863,15 +2863,21 @@ async function conferenceSelectedQueueCalls() {
       //    INTERACTING — the GC client does this hold transparently)
       //  • wait for the new call to land as ours after auto-answer
       for (const id of toAssign) {
-        // Skip if we already became the participant (cache caught up).
         const conv = conversations.get(id);
         if (conv?.hasMe && !conv.disconnected) continue;
+        // Pre-flight: skip dead calls so /assign doesn't return its
+        // unhelpful generic 400.
+        if (!(await isCallStillActive(id))) {
+          showBanner({ type: "warn", title: "Call ended", message: `${(conv?.name || id)}: hung up before merge`, autoHideMs: 4000 });
+          continue;
+        }
         try {
           await holdAllOtherActiveCalls(id);
           await assignCallToMe(id);
           await waitForCallToBeMine(id, 8000);
         } catch (e) {
-          showBanner({ type: "error", title: "Assign failed", message: `${id}: ${e.message}`, autoHideMs: 5000 });
+          const reason = await explainAssignFailure(id, e.message);
+          showBanner({ type: "error", title: "Assign failed", message: `${(conv?.name || id)}: ${reason}`, autoHideMs: 6000 });
         }
       }
       // Final refresh just to settle the cache before merging.
@@ -3445,11 +3451,18 @@ function openMergeModal(row) {
             status.textContent = `Assigning call ${i}/${queuedSel.size}…`;
             const conv = conversations.get(qid);
             if (conv?.hasMe && !conv.disconnected) continue; // already ours
+            // Pre-flight: skip dead calls.
+            if (!(await isCallStillActive(qid))) {
+              assignFailed.push({ id: qid, err: "call hung up before merge" });
+              continue;
+            }
             try {
               await holdAllOtherActiveCalls(qid);
               await assignCallToMe(qid);
               await waitForCallToBeMine(qid, 8000);
-            } catch (e) { assignFailed.push({ id: qid, err: e.message }); }
+            } catch (e) {
+              assignFailed.push({ id: qid, err: await explainAssignFailure(qid, e.message) });
+            }
           }
           await new Promise(r => setTimeout(r, 500));
         }
@@ -4477,6 +4490,38 @@ async function holdAllOtherActiveCalls(exceptConvId) {
 async function assignCallToMe(convId) {
   if (!currentUser?.id) throw new Error("No current user");
   await apiFetch(`/api/v2/conversations/${convId}/assign`, { method: "POST", body: { userId: currentUser.id } });
+}
+
+// Pre-flight check before /assign — fetch the conversation directly
+// from /conversations/calls/{id} and confirm it has live participants
+// to assign against. GC's local cache may show a queue call as still
+// active 30+ seconds after the customer hung up, leading /assign to
+// 400 with the generic 'Targeted User ID is not valid'.
+async function isCallStillActive(convId) {
+  try {
+    const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+    const parts = c?.participants || [];
+    // Active = at least one participant without endTime
+    return parts.some(p => !p.endTime);
+  } catch { return false; }
+}
+
+// Translate GC's generic /assign 400 into a specific cause by looking
+// at the conv state after the failure. Returns a friendly message.
+async function explainAssignFailure(convId, originalError) {
+  try {
+    const c = await apiFetch(`/api/v2/conversations/calls/${convId}`);
+    const parts = c?.participants || [];
+    const allEnded = parts.length > 0 && parts.every(p => p.endTime);
+    if (allEnded) return "the call hung up before it could be assigned";
+    const acd = parts.find(p => p.purpose === "acd" && !p.endTime);
+    const agent = parts.find(p => p.purpose === "agent" && !p.endTime);
+    if (agent && agent.userId && agent.userId !== currentUser?.id) {
+      return "another agent picked up the call first";
+    }
+    if (!acd && !agent) return "the call is no longer routable from a queue";
+    return originalError;
+  } catch { return originalError; }
 }
 
 // Prepare the agent for a merge: clear NOT_RESPONDING (which blocks
