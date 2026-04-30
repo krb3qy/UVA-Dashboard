@@ -1432,6 +1432,11 @@ const gcSdkSessions = new Map();   // convId → {sessionId, hasMedia, mute, hol
 // a call. Distinct from autoConnectSessions:true which only auto-accepts
 // when the GC server flags the alert as autoAnswer (acdAutoAnswer on user).
 const sdkAutoAcceptIds = new Set();
+// Active SDK ringtone state — keyed by convId. We synthesize a phone-ring
+// pattern via Web Audio API so we don't need an audio file. Only rings
+// if no alert banner is currently firing for the same conv (otherwise
+// the alert sound covers it — see startSdkRingtone).
+const sdkRingers = new Map();
 const sdkHasSession   = (cid) => gcSdkSessions.has(cid);
 const sdkSessionLive  = (cid) => !!gcSdkSessions.get(cid)?.hasMedia;
 const sdkSessionMuted = (cid) => !!gcSdkSessions.get(cid)?.mute;
@@ -3422,6 +3427,7 @@ async function doAction(act, row) {
           const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
           if (accept) {
             await accept({ conversationId: convId, autoAnswer: true, audioElement: el("gcSdkAudio") });
+            stopSdkRingtone(convId);
           } else {
             throw new Error("SDK has no acceptPendingSession/acceptSession method.");
           }
@@ -3457,19 +3463,17 @@ async function doAction(act, row) {
           try {
             await gcSdk.endSession({ conversationId: convId, reason: "success" });
           } catch (e) {
-            // SDK reports "Unable to find session" when our local state
-            // lags behind a server-side teardown (alert timed out, etc.).
-            // Treat as success: prune our state and re-render so the
-            // stale call strip clears.
             if (/find session|no.*session|not.*found/i.test(e.message || "")) {
               dlog.warn("doAction", "endSession: SDK has no record, cleaning up locally", { convId, msg: e.message });
               gcSdkSessions.delete(convId);
               sdkAutoAcceptIds.delete(convId);
+              stopSdkRingtone(convId);
               try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
               break;
             }
             throw e;
           }
+          stopSdkRingtone(convId);
         } else {
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
         }
@@ -5944,6 +5948,10 @@ function wireSdkEvents() {
           dlog.warn("gcSdk", "no acceptPendingSession method on SDK", { cid, sdkKeys: Object.keys(gcSdk).slice(0, 30) });
         }
       } catch (e) { dlog.error("gcSdk", "acceptPendingSession threw", { cid, msg: e.message }); }
+    } else {
+      // Not an auto-accept flow → ring (unless an alert is already firing
+      // for this conv, in which case startSdkRingtone bails internally).
+      startSdkRingtone(cid);
     }
   });
   gcSdk.on("sessionStarted", (sess) => {
@@ -5952,13 +5960,14 @@ function wireSdkEvents() {
     if (!cid) return;
     const cur = gcSdkSessions.get(cid) || {};
     gcSdkSessions.set(cid, { ...cur, sessionId: sess.id || sess.sessionId, pending: false, hasMedia: true });
+    stopSdkRingtone(cid);
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
   });
   gcSdk.on("sessionEnded", (sess, reason) => {
     dlog.info("gcSdk-evt", "sessionEnded", { conversationId: sess?.conversationId, sessionId: sess?.id, reason: reason?.condition || reason });
     const cid = sess?.conversationId;
-    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); }
+    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); stopSdkRingtone(cid); }
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
   });
@@ -5970,7 +5979,7 @@ function wireSdkEvents() {
   gcSdk.on("cancelPendingSession", (s) => {
     const cid = s?.conversationId || s;
     dlog.info("gcSdk-evt", "cancelPendingSession", { conversationId: cid });
-    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); }
+    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); stopSdkRingtone(cid); }
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
   });
@@ -6051,10 +6060,62 @@ setInterval(() => {
       dlog.warn("gcSdk-sweep", "pruning stale pendingSession (>45s without start/cancel)", { cid });
       gcSdkSessions.delete(cid);
       sdkAutoAcceptIds.delete(cid);
+      stopSdkRingtone(cid);
       try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
     }
   }
 }, 15000);
+
+// Synthesize a phone-ring tone via Web Audio. Rings until stopSdkRingtone
+// is called. Cadence: ~0.4s on, 0.2s off, 0.4s on, 1.5s off (US ring).
+// Uses two summed oscillators (440 + 480 Hz) for the classic dual-tone.
+function startSdkRingtone(convId) {
+  if (sdkRingers.has(convId)) return;
+  // Skip if an alert banner is currently firing for this conv — the alert
+  // is already making audio, so a second ringtone would just be noise.
+  if (typeof activeAlerts !== "undefined" && activeAlerts.has?.(convId)) {
+    dlog.debug("ringtone", "skipping ring — alert active", { convId });
+    return;
+  }
+  try {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) { dlog.warn("ringtone", "no AudioContext"); return; }
+    const ctx = new Ctor();
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const osc1 = ctx.createOscillator(); osc1.type = "sine"; osc1.frequency.value = 440;
+    const osc2 = ctx.createOscillator(); osc2.type = "sine"; osc2.frequency.value = 480;
+    osc1.connect(gain); osc2.connect(gain);
+    gain.connect(ctx.destination);
+    osc1.start(); osc2.start();
+    // Cadence loop: pulse pulse, then long gap.
+    const cadence = [0.4, 0.2, 0.4, 1.5]; // sec: on, off, on, off
+    let i = 0;
+    const tick = () => {
+      const dur = cadence[i % cadence.length];
+      const on = i % 2 === 0;
+      gain.gain.setTargetAtTime(on ? 0.18 : 0, ctx.currentTime, 0.02);
+      i++;
+      const next = setTimeout(tick, Math.round(dur * 1000));
+      const ent = sdkRingers.get(convId);
+      if (ent) ent.timeout = next;
+    };
+    tick();
+    sdkRingers.set(convId, { ctx, gain, osc1, osc2, timeout: null });
+    dlog.info("ringtone", "ring started", { convId });
+  } catch (e) {
+    dlog.warn("ringtone", "start failed", { convId, msg: e.message });
+  }
+}
+function stopSdkRingtone(convId) {
+  const ent = sdkRingers.get(convId);
+  if (!ent) return;
+  try { clearTimeout(ent.timeout); } catch {}
+  try { ent.osc1.stop(); ent.osc2.stop(); } catch {}
+  try { ent.ctx.close(); } catch {}
+  sdkRingers.delete(convId);
+  dlog.info("ringtone", "ring stopped", { convId });
+}
 
 function showSdkUnavailableBanner(reason) {
   try {
