@@ -2858,26 +2858,30 @@ async function conferenceSelectedQueueCalls() {
     // don't try to /assign a call we already own (cache lag).
     try { await seedMyInteractions(); } catch {}
     await withAutoAnswerVoice(async () => {
-      // Serialize assigns. Before each /assign:
-      //  • hold any call we're already on (GC rejects /assign while
-      //    INTERACTING — the GC client does this hold transparently)
-      //  • wait for the new call to land as ours after auto-answer
+      // Fire /assigns rapidly WITHOUT waiting between them. Each /assign
+      // just submits the conversation to the routing engine; the engine
+      // then alerts the user sequentially. If we waited for one to land
+      // before issuing the next, the user would already be INTERACTING
+      // and GC refuses /assign on an INTERACTING user. IW-Merge works
+      // because it fires /assigns rapidly, then waits 3s and reloads.
+      const assignFailed = [];
       for (const id of toAssign) {
         const conv = conversations.get(id);
         if (conv?.hasMe && !conv.disconnected) continue;
-        // Pre-flight: skip dead calls so /assign doesn't return its
-        // unhelpful generic 400.
         if (!(await isCallStillActive(id))) {
           showBanner({ type: "warn", title: "Call ended", message: `${(conv?.name || id)}: hung up before merge`, autoHideMs: 4000 });
           continue;
         }
-        try {
-          await holdAllOtherActiveCalls(id);
-          await assignCallToMe(id);
-          await waitForCallToBeMine(id, 8000);
-        } catch (e) {
+        try { await assignCallToMe(id); }
+        catch (e) {
           const reason = await explainAssignFailure(id, e.message);
-          showBanner({ type: "error", title: "Assign failed", message: `${(conv?.name || id)}: ${reason}`, autoHideMs: 6000 });
+          assignFailed.push({ id, reason });
+        }
+      }
+      if (assignFailed.length) {
+        for (const f of assignFailed) {
+          const cName = conversations.get(f.id)?.name || f.id;
+          showBanner({ type: "error", title: "Assign failed", message: `${cName}: ${f.reason}`, autoHideMs: 5000 });
         }
       }
       // Final refresh just to settle the cache before merging.
@@ -3443,28 +3447,23 @@ function openMergeModal(row) {
         const assignFailed = [];
         if (queuedSel.size > 0) {
           status.textContent = `Assigning ${queuedSel.size} queue call(s) to you…`;
-          // Serialize: before each /assign, hold any active calls so GC
-          // accepts the new alert.
-          let i = 0;
+          // Fire /assigns rapidly without waiting between them — same
+          // pattern as IW-Merge. The routing engine handles sequential
+          // alerting + auto-answer.
           for (const qid of queuedSel) {
-            i++;
-            status.textContent = `Assigning call ${i}/${queuedSel.size}…`;
             const conv = conversations.get(qid);
-            if (conv?.hasMe && !conv.disconnected) continue; // already ours
-            // Pre-flight: skip dead calls.
+            if (conv?.hasMe && !conv.disconnected) continue;
             if (!(await isCallStillActive(qid))) {
               assignFailed.push({ id: qid, err: "call hung up before merge" });
               continue;
             }
-            try {
-              await holdAllOtherActiveCalls(qid);
-              await assignCallToMe(qid);
-              await waitForCallToBeMine(qid, 8000);
-            } catch (e) {
-              assignFailed.push({ id: qid, err: await explainAssignFailure(qid, e.message) });
-            }
+            try { await assignCallToMe(qid); }
+            catch (e) { assignFailed.push({ id: qid, err: await explainAssignFailure(qid, e.message) }); }
           }
-          await new Promise(r => setTimeout(r, 500));
+          status.textContent = `Waiting for calls to deliver…`;
+          // Single wait at the end for routing engine to deliver +
+          // auto-answer all the assigned calls.
+          await new Promise(r => setTimeout(r, 4000));
         }
         // Re-fetch from /api/v2/conversations — only ids the API now
         // reports as ours are eligible to merge (mirrors IW-Merge).
