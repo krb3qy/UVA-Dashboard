@@ -1875,13 +1875,14 @@ function handleNotification(msg) {
   const topic = msg.topicName || "";
   const body = msg.eventBody;
   if (topic.includes(".conversations.calls")) {
-    // v2.routing.queues.{queueId}.conversations.calls — extract queueId
-    // from the topic so a call that's lost its ACD leg still gets filed
-    // under the right queue.
     let hintQid = null;
     const m = topic.match(/^v2\.routing\.queues\.([^.]+)\.conversations\.calls$/);
     if (m) hintQid = m[1];
-    if (body && body.id) { ingestConversation(body, hintQid); renderAll(); }
+    if (body && body.id) {
+      ingestConversation(body, hintQid);
+      reconcileSdkSessionFromConv(body);
+      renderAll();
+    }
   } else if (topic.endsWith(".observations")) {
     const qid = topic.split(".")[3];
     if (qid && body) {
@@ -6048,23 +6049,52 @@ function wireSdkEvents() {
 }
 
 // Sweeper: prune pendingSession entries that never became real sessions
-// and never got an explicit cancellation event. Defensive against SDK
-// event-name drift. Runs every 15s.
+// and never got an explicit cancellation event. Defensive backup for
+// reconcileSdkSessionFromConv (WS-driven cleanup) — kicks in if the WS
+// path missed the update.
 setInterval(() => {
   if (!gcSdkReady) return;
   const now = Date.now();
   for (const [cid, s] of gcSdkSessions.entries()) {
     if (!s.pending || s.hasMedia) continue;
     if (!s.firstSeenAt) { s.firstSeenAt = now; continue; }
-    if (now - s.firstSeenAt > 45000) {
-      dlog.warn("gcSdk-sweep", "pruning stale pendingSession (>45s without start/cancel)", { cid });
+    if (now - s.firstSeenAt > 15000) {
+      dlog.warn("gcSdk-sweep", "pruning stale pendingSession (>15s, WS reconcile missed)", { cid });
       gcSdkSessions.delete(cid);
       sdkAutoAcceptIds.delete(cid);
       stopSdkRingtone(cid);
       try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
     }
   }
-}, 15000);
+}, 3000);
+
+// Reconcile SDK session state with WS conversation update. Called after
+// every ingestConversation. If the SDK has a pendingSession for this
+// conv but the WS now shows our agent leg ended (endTime set, or state
+// disconnected/terminated), prune our SDK state in real-time. Without
+// this, cleanup waited on a sweeper sweep (up to 60s).
+function reconcileSdkSessionFromConv(c) {
+  if (!c?.id) return;
+  const cid = c.id;
+  const sess = gcSdkSessions.get(cid);
+  if (!sess) return;
+  // Only relevant for sessions that haven't reached hasMedia. A connected
+  // session ending is handled by sessionEnded.
+  if (sess.hasMedia) return;
+  const myPart = (c.participants || [])
+    .filter(p => p.userId === currentUser?.id)
+    .reverse()[0];
+  if (!myPart) return;
+  const state = (myPart.state || "").toLowerCase();
+  const ended = !!myPart.endTime || state === "disconnected" || state === "terminated";
+  if (ended) {
+    dlog.info("gcSdk-reconcile", "agent leg ended via WS, pruning pending SDK session", { cid, state, endTime: myPart.endTime });
+    gcSdkSessions.delete(cid);
+    sdkAutoAcceptIds.delete(cid);
+    stopSdkRingtone(cid);
+    try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
+  }
+}
 
 // Synthesize a phone-ring tone via Web Audio. Rings until stopSdkRingtone
 // is called. Cadence: ~0.4s on, 0.2s off, 0.4s on, 1.5s off (US ring).
