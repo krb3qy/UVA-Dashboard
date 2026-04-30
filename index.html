@@ -2064,8 +2064,20 @@ function ingestConversation(c, hintQueueId) {
     assignedUserId: resolvedUserId,
     assignedUserName: resolvedUserName,
     startTimeMs, queueEnterMs, stateChangeMs,
-    hasMe: parts.some(p => (p.userId || p.user?.id) === currentUser?.id && !p.endTime)
-        || (gcSdkReady && gcSdkSessions.get(c.id)?.hasMedia === true),
+    // hasMe = "user is actively on this call" — must be CONNECTED, not
+    // just alerting. An ACD-routed call gets an agent participant added
+    // while ringing the user, so matching alerting participants would
+    // make the dashboard think the user picked up the call before they
+    // actually did. Also dismisses the alert banner prematurely.
+    hasMe: parts.some(p => {
+      const uid = p.userId || p.user?.id;
+      if (uid !== currentUser?.id) return false;
+      if (p.endTime) return false;
+      const st = (p.state || "").toLowerCase();
+      // Connected/held = on the call. Empty state we accept defensively.
+      // Explicitly exclude alerting/dialing/contacting.
+      return st === "connected" || st === "held" || st === "active" || st === "";
+    }) || (gcSdkReady && gcSdkSessions.get(c.id)?.hasMedia === true),
     // GC distinguishes clean "disconnected" from error-paths like "terminated";
     // both mean the leg is over. Pruning only on "disconnected" let terminated
     // rows linger in the cache.
