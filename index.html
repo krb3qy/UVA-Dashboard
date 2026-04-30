@@ -5191,7 +5191,19 @@ async function mergeQueueCallsViaSdk(ids) {
     try { await seedMyInteractions(); } catch {}
     const r = conversations.get(id);
     if (r?.hasMe) {
-      dlog.info("merge", "already on this call — skipping /assign", { id });
+      // We're already a participant. But that doesn't mean we're past
+      // 'pending' — GC may still be alerting us on this conv (auto-routed
+      // after on-queue flip). /assign on the next call would 400 with
+      // 'User is pending on conversation X'. Wait until this conv is
+      // CONNECTED (accepted by SDK) before moving on.
+      dlog.info("merge", "already on this call — skipping /assign, waiting for connected", { id });
+      const landed = await waitForAccepted(id);
+      if (!landed) {
+        dlog.warn("merge", "auto-routed call did not connect in 12s", { id });
+        assignFailures.push({ id, err: "auto-routed call did not connect (timeout)" });
+      } else {
+        dlog.success("merge", "auto-routed call connected", { id });
+      }
       continue;
     }
     if (!(await isCallStillActive(id))) {
