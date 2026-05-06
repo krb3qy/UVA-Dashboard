@@ -1135,6 +1135,7 @@
     <button id="devCopyBtn">Copy</button>
     <button id="devClearBtn">Clear</button>
     <button id="devPauseBtn">Pause</button>
+    <button id="devStreamBtn" title="Stream log to file">🔴 Stream</button>
     <span class="sp"></span>
     <button class="x" id="devCloseBtn">✕</button>
   </div>
@@ -1180,6 +1181,11 @@ function devSavePersist() {
   } catch {}
 }
 
+// Live stream state — File System Access API. Gated to DEV_USER_IDS.
+let devStreamHandle = null;       // FileSystemFileHandle
+let devStreamBuffer = [];         // pending lines
+let devStreamFlushTimer = null;   // setInterval id
+
 function dashLog(level, area, msg, data) {
   if (devPaused) return;
   const e = { t: Date.now(), level: level || "info", area: area || "", msg: String(msg || "") };
@@ -1198,6 +1204,10 @@ function dashLog(level, area, msg, data) {
   if (devLog.length > DEV_MAX_MEM) devLog.shift();
   devSavePersist();
   if (level === "error") devUnseenErrors++;
+  // Stream to file if user enabled it.
+  if (devStreamHandle) {
+    devStreamBuffer.push(`${fmtTs(e.t)} [${e.level}] [${e.area}] ${e.msg}${e.data ? " " + e.data : ""}\n`);
+  }
   // Also still print to console so DevTools is unaffected
   const consoleFn = level === "error" ? console.error :
                     level === "warn"  ? console.warn  :
@@ -1206,6 +1216,71 @@ function dashLog(level, area, msg, data) {
   else consoleFn(`[${area}]`, msg);
   if (devPanelOpen) renderDevLogIncremental(e);
   updateDevIcon();
+}
+
+async function devStreamFlush() {
+  if (!devStreamHandle || devStreamBuffer.length === 0) return;
+  const lines = devStreamBuffer.splice(0);
+  try {
+    const file = await devStreamHandle.getFile();
+    const writable = await devStreamHandle.createWritable({ keepExistingData: true });
+    await writable.seek(file.size);
+    await writable.write(lines.join(""));
+    await writable.close();
+  } catch (err) {
+    // Push lines back to retry next flush.
+    devStreamBuffer.unshift(...lines);
+    console.warn("[devStream] flush failed", err);
+  }
+}
+
+async function devStreamStart() {
+  // Hardcoded gate: only Alex's user id can stream (defense in depth on
+  // top of the dev-panel mount gate).
+  if (!currentUser?.id || !DEV_USER_IDS.has(currentUser.id)) {
+    alert("Streaming is restricted.");
+    return false;
+  }
+  if (!window.showSaveFilePicker) {
+    alert("File System Access API not supported in this browser.");
+    return false;
+  }
+  try {
+    devStreamHandle = await window.showSaveFilePicker({
+      suggestedName: "uvad-live.log",
+      types: [{ description: "Log file", accept: { "text/plain": [".log", ".txt"] } }]
+    });
+    // Truncate any prior content so each session starts clean.
+    const w = await devStreamHandle.createWritable();
+    await w.write(`# UVAD live log — ${new Date().toISOString()} — user ${currentUser.id}\n`);
+    await w.close();
+    if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
+    return true;
+  } catch (err) {
+    devStreamHandle = null;
+    if (err?.name !== "AbortError") console.warn("[devStream] picker failed", err);
+    return false;
+  }
+}
+
+function devStreamStop() {
+  if (devStreamFlushTimer) { clearInterval(devStreamFlushTimer); devStreamFlushTimer = null; }
+  // Final flush of any pending lines.
+  devStreamFlush().catch(() => {});
+  devStreamHandle = null;
+  devStreamBuffer = [];
+}
+
+function devStreamUpdateBtn() {
+  const btn = document.getElementById("devStreamBtn");
+  if (!btn) return;
+  if (devStreamHandle) {
+    btn.textContent = "🟢 Streaming";
+    btn.title = "Click to stop streaming";
+  } else {
+    btn.textContent = "🔴 Stream";
+    btn.title = "Click to pick a file and start streaming";
+  }
 }
 
 // Convenience wrappers
@@ -1350,6 +1425,18 @@ function wireDevPanel() {
   };
   document.getElementById("devFilter").oninput = renderDevLogFull;
   document.getElementById("devLevelFilter").onchange = renderDevLogFull;
+  document.getElementById("devStreamBtn").onclick = async () => {
+    if (devStreamHandle) {
+      devStreamStop();
+      devStreamUpdateBtn();
+      dlog.info("devStream", "streaming stopped");
+    } else {
+      const ok = await devStreamStart();
+      devStreamUpdateBtn();
+      if (ok) dlog.info("devStream", "streaming started");
+    }
+  };
+  devStreamUpdateBtn();
   // Alt+D toggle
   window.addEventListener("keydown", (e) => {
     if (e.altKey && (e.key === "d" || e.key === "D")) {
