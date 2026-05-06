@@ -1966,7 +1966,14 @@ function formatPresenceName(raw) {
 // ================================================================
 function ingestConversation(c, hintQueueId) {
   const parts = c.participants || [];
-  const customer = parts.find(p => p.purpose === "customer" || p.purpose === "external") || {};
+  // Conference detection: a call is a conference when there are 2+
+  // live customer/external participants on the same conversation.
+  // Each merged-in queue call's customer leg gets added as a separate
+  // customer participant on the target conf conversation.
+  const allCustomers = parts.filter(p =>
+    (p.purpose === "customer" || p.purpose === "external") && !p.endTime);
+  const customer = allCustomers[0] || parts.find(p => p.purpose === "customer" || p.purpose === "external") || {};
+  const isConference = allCustomers.length > 1;
   // Prefer purpose=agent for ACD-routed calls. Fall back to a user-purpose
   // leg with a userId for direct-routed / transferred / non-ACD calls so
   // the State column doesn't degrade to bare "Connected" when the agent
@@ -2033,6 +2040,7 @@ function ingestConversation(c, hintQueueId) {
   else if (stateKey === "connected") stateDisplay = "Connected";
   else if (stateKey === "offering") stateDisplay = "In Queue";
   else if (stateKey === "held") stateDisplay = "On Hold";
+  if (isConference) stateDisplay = `${stateDisplay} (Conference, ${allCustomers.length})`;
 
   // Compute candidate timestamps from the current event payload. WS events
   // can be partial — connectedTime/startAlertingTime are sometimes absent,
@@ -2052,7 +2060,12 @@ function ingestConversation(c, hintQueueId) {
   const stateChangeMs = startTimeMs;
   const row = {
     id: c.id,
-    name: customer.name || agent?.name || "",
+    isConference,
+    customerCount: allCustomers.length,
+    customerNames: allCustomers.map(p => p.name || p.address || "").filter(Boolean),
+    name: isConference
+      ? `Conference: ${allCustomers.map(p => p.name || p.address).filter(Boolean).join(", ")}`
+      : (customer.name || agent?.name || ""),
     number: customer.address || primaryCall.other || primaryCall.self || "",
     queueId,
     queueName: queueId ? (queuesById.get(queueId)?.name || queueId) : "",
@@ -5124,6 +5137,25 @@ async function mergeQueueCallsViaSdk(ids) {
 
   // 1. Refresh from API so we know which selected ids are already ours.
   try { await seedMyInteractions(); } catch {}
+
+  // 1b. Defensive cleanup of stale SDK state from prior merges. Without
+  //     this, back-to-back merge attempts can carry forward orphaned
+  //     gcSdkSessions / sdkAutoAcceptIds entries for convs that already
+  //     ended (or that were merged into a conference). The waitForAccepted
+  //     loop then sees a phantom hasMedia=true and short-circuits, or the
+  //     auto-accept fires for a session that's already gone.
+  for (const [cid] of [...gcSdkSessions.entries()]) {
+    const r = conversations.get(cid);
+    if (!r || r.disconnected) {
+      gcSdkSessions.delete(cid);
+      sdkAutoAcceptIds.delete(cid);
+      stopSdkRingtone(cid);
+    }
+  }
+  for (const cid of [...sdkAutoAcceptIds]) {
+    const r = conversations.get(cid);
+    if (!r || r.disconnected) sdkAutoAcceptIds.delete(cid);
+  }
 
   // No acdAutoAnswer toggle: it caused GC to pre-route a call to us
   // before our /assign loop could run, leaving us INTERACTING on a call
