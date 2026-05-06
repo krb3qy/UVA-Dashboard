@@ -1143,11 +1143,13 @@
   <div class="dev-log" id="devLog"></div>
 </div>
 
-<!-- Genesys Cloud WebRTC SDK — brings call audio into this tab.
-     NO crossorigin attr — the GC SDK CDN doesn't send CORS headers,
-     so crossorigin="anonymous" causes the browser to fetch but refuse
-     to execute the script (window.GenesysCloudWebrtcSdk stays undefined). -->
-<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js"></script>
+<!-- Genesys Cloud WebRTC SDK v8 — required for persistent-connection
+     multiplex (the "Line Appearance" / "Calls Per Line" path). v6
+     doesn't have multiplex code, so a 2nd call delivered onto our
+     existing softphone session never surfaces. v8 fires
+     conversationUpdate for those.
+     NO crossorigin attr — the GC SDK CDN doesn't send CORS headers. -->
+<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v8/genesys-cloud-webrtc-sdk.bundle.min.js"></script>
 
 <script>
 // ================================================================
@@ -6498,6 +6500,24 @@ function wireSdkEvents() {
   gcSdk.on("station", (info) => {
     dlog.info("gcSdk-evt", "station", { id: info?.id, name: info?.name, type: info?.type, status: info?.status });
     try { renderMyPresence(); } catch {}
+  });
+  // v8 only: conversationUpdate fires when GC multiplexes a new call
+  // onto our persistent softphone session (Line Appearance > 1). With
+  // persistent connection, no new pendingSession event fires for the
+  // additional call — instead we get this event with the conv id, and
+  // we treat the conv as "ours" by setting an SDK-session entry with
+  // hasMedia=true. Lets waitForAccepted return true via sdkSessionLive.
+  gcSdk.on?.("conversationUpdate", (evt) => {
+    const cid = evt?.conversationId || evt?.activeConversationId || evt?.id;
+    const sessIds = evt?.sessionIds || evt?.activeSessions || [];
+    dlog.info("gcSdk-evt", "conversationUpdate", { cid, sessIds, raw: evt });
+    if (!cid) return;
+    const cur = gcSdkSessions.get(cid) || {};
+    const sid = (Array.isArray(sessIds) && sessIds[0]) || cur.sessionId || `mux-${cid}`;
+    gcSdkSessions.set(cid, { ...cur, sessionId: sid, pending: false, hasMedia: true, multiplex: true });
+    sdkAutoAcceptIds.delete(cid);
+    seedConvWithRetry(cid, 3, 700);
+    try { renderInlineCallStrip(); renderCallWidgets(); renderAll(); } catch {}
   });
   gcSdk.on("error", (err) => {
     dlog.error("gcSdk-evt", "error", { msg: err?.message || String(err), fatal: !!err?.fatal });
