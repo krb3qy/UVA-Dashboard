@@ -5242,20 +5242,45 @@ async function mergeQueueCallsViaSdk(ids) {
     return true;
   };
 
-  // Wait until the SDK confirms this conv is connected (hasMedia=true)
-  // OR the conversations map shows us as a connected participant.
-  // Don't move on until we're past 'pending'.
-  const waitForAccepted = async (id, timeoutMs = 12000) => {
+  // Wait until this conv is fully accepted. Two distinct paths:
+  //   (A) Cold pickup — SDK gets a propose, sessionStarted fires,
+  //       hasMedia=true. Fast (< 2s typical).
+  //   (B) Multiplex — agent already on a softphone session. GC adds
+  //       this call onto the existing session (no new SDK propose).
+  //       Audio path comes up via re-INVITE; can take 15-25s in practice.
+  //       Detected only via WS / API: my participant connected.
+  //
+  // Authoritative signals:
+  //   - sdkSessionLive(id)          → path A, media flowing locally
+  //   - conversations[id].hasMe     → either path, server confirmed us
+  //
+  // Poll the API directly every 800ms in case WS lags. 30s timeout
+  // covers the slow multiplex case.
+  const waitForAccepted = async (id, timeoutMs = 30000) => {
     const start = Date.now();
+    let lastApiCheck = 0;
     while (Date.now() - start < timeoutMs) {
       if (sdkSessionLive(id)) return true;
       const r = conversations.get(id);
       if (r?.hasMe && !r.disconnected && (r.stateKey === "connected" || r.stateKey === "held")) return true;
-      // If pendingSession exists but hasn't auto-accepted, force-accept.
       if (gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
         try { await tryAcceptPending(id); } catch {}
       }
-      await new Promise(r => setTimeout(r, 250));
+      const now = Date.now();
+      if (now - lastApiCheck > 800) {
+        lastApiCheck = now;
+        try {
+          const c = await apiFetch(`/api/v2/conversations/calls/${id}`);
+          const myConnected = (c?.participants || []).some(p => {
+            const uid = p.userId || p.user?.id;
+            if (uid !== currentUser?.id || p.endTime) return false;
+            const st = (p.state || "").toLowerCase();
+            return st === "connected" || st === "held";
+          });
+          if (myConnected) return true;
+        } catch {}
+      }
+      await new Promise(r => setTimeout(r, 300));
     }
     return false;
   };
