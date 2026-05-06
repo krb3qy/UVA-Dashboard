@@ -5139,6 +5139,47 @@ async function mergeQueueCallsViaSdk(ids) {
     if (why) throw new Error(why);
   }
 
+  // PHASE 0: ADD-TO-EXISTING-CONFERENCE FAST PATH.
+  // genesys-cloud-webrtc-sdk v6.1.7 has no concurrent-session limit —
+  // but at the GC server side, station Line Appearance==1 (default)
+  // multiplexes new conversations onto the existing softphone session
+  // and does NOT fire a fresh `propose` to the SDK. So /assign + wait-
+  // for-pendingSession will time out (we saw 12s timeout + ICE errors
+  // 6s later in real logs).
+  //
+  // For any selected call we don't already own, when we DO have an
+  // existing connected/held call (the conference), skip the /assign
+  // dance and directly PATCH /conference with the queue call as
+  // `conversationIds`. GC's edge consolidates server-side via re-INVITE
+  // on the existing session.
+  const existingMine = [...conversations.values()].find(r =>
+    r.hasMe && !r.disconnected &&
+    (r.stateKey === "connected" || r.stateKey === "held")
+  );
+  if (existingMine) {
+    const newCallIds = ids.filter(id => id !== existingMine.id);
+    const stillThere = [];
+    for (const id of newCallIds) {
+      if (await isCallStillActive(id)) stillThere.push(id);
+    }
+    if (stillThere.length) {
+      dlog.info("merge", "fast-path: adding to existing conference", { conf: existingMine.id, adding: stillThere });
+      try {
+        await apiFetch(`/api/v2/conversations/calls/${existingMine.id}/conference`, {
+          method: "PATCH",
+          body: { conversationIds: stillThere }
+        });
+        dlog.success("merge", "fast-path /conference complete", { merged: 1 + stillThere.length });
+        return { merged: 1 + stillThere.length, failed: [] };
+      } catch (e) {
+        // 'no common user' = queue calls don't have Alex yet; fall through
+        // to the assign-then-conference path. Other 400s also fall through
+        // and surface there.
+        dlog.warn("merge", "fast-path /conference failed, falling back to assign-then-conference", { msg: e.message });
+      }
+    }
+  }
+
   // 3. Make sure we're on queue + queue member. Use the first selected
   //    id for the queue-membership check (all selected calls are in the
   //    same queue in the typical use case).
