@@ -490,9 +490,8 @@
     </div>
     <div class="item" data-menu="actions">Actions
       <div class="menu-dropdown">
-        <div class="mi" data-cmd="confDialer">Conference Dialer…</div>
+        <div class="mi" data-cmd="dialer">Dialer…</div>
         <div class="mi" data-cmd="sendSms">Send Text Message…</div>
-        <div class="mi" data-cmd="makeCall">Make Call…</div>
       </div>
     </div>
     <div class="item" data-menu="help">Help
@@ -564,7 +563,6 @@
         <div class="queue-action-bar" id="queueActionBar" style="display:none;padding:6px 8px;background:var(--win-soft,#f3f3f3);border-bottom:1px solid var(--win-border,#ddd);align-items:center;gap:8px">
           <span id="queueActionBarLabel" style="flex:1;font-size:12px;color:var(--win-muted)"></span>
           <button class="btn btn-sm" id="queueActionBarClear">Clear</button>
-          <button class="btn btn-sm btn-primary" id="queueActionBarConference">Conference</button>
         </div>
         <div class="queue-panes" id="queuePanes" data-split="single">
           <div class="queue-pane" data-pane="a">
@@ -644,20 +642,9 @@
 
   <!-- ACTION TOOLBAR (anchored at the very bottom, PureConnect-style icon-above-label) -->
   <div class="toolbar toolbar-bottom" id="toolbar">
-    <button class="tbtn" data-act="makeCall" title="Make Call (Ctrl+M)">
-      <svg viewBox="0 0 16 16"><path fill="#000" d="M3 3c0-.6.4-1 1-1h2.3l1.4 3.5-1.8 1.1a10 10 0 0 0 4.5 4.5l1.1-1.8L15 10.7V13c0 .6-.4 1-1 1C7 14 2 9 2 2c0-.6.4-1 1-1h0z"/></svg>
-      <span class="lbl">Make Call</span>
-    </button>
-    <button class="tbtn" data-act="confDialer" title="Conference Dialer (saved speed-dial groups)">
-      <svg viewBox="0 0 16 16">
-        <circle cx="4" cy="5" r="1.8" fill="#036"/>
-        <circle cx="12" cy="5" r="1.8" fill="#036"/>
-        <circle cx="8" cy="3.5" r="1.8" fill="#036"/>
-        <path fill="#036" d="M1.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H1.5z"/>
-        <path fill="#036" d="M9.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H9.5z"/>
-        <path fill="#036" d="M5.5 11c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1.5h-5z"/>
-      </svg>
-      <span class="lbl">Conference</span>
+    <button class="tbtn" data-act="dialer" title="Dialer — single dial, multi-dial bridge, contact picker">
+      <svg viewBox="0 0 16 16"><path fill="#036" d="M3 3c0-.6.4-1 1-1h2.3l1.4 3.5-1.8 1.1a10 10 0 0 0 4.5 4.5l1.1-1.8L15 10.7V13c0 .6-.4 1-1 1C7 14 2 9 2 2c0-.6.4-1 1-1h0z"/></svg>
+      <span class="lbl">Dialer</span>
     </button>
     <span class="sep"></span>
     <button class="tbtn" data-act="pickup" title="Pick Up selected queue call">
@@ -682,7 +669,7 @@
       <span class="lbl">Consult</span>
     </button>
     <button class="tbtn" data-act="disconnect" title="Disconnect (Ctrl+D)">
-      <svg viewBox="0 0 16 16"><path fill="#c00" d="M3 7c3-4 7-4 10 0l-2 2a3 3 0 0 0-2-1v2l-2 1-2-1V8a3 3 0 0 0-2 1L3 7z" transform="rotate(135 8 8)"/></svg>
+      <svg viewBox="0 0 16 16"><g transform="rotate(135 8 8)"><path fill="#c00" d="M3 7c3-4 7-4 10 0l-2 2a3 3 0 0 0-2-1v2l-2 1-2-1V8a3 3 0 0 0-2 1L3 7z"/></g><path stroke="#c00" stroke-width="2" stroke-linecap="round" d="M2 14L14 2"/></svg>
       <span class="lbl">Disconnect</span>
     </button>
     <span class="sep"></span>
@@ -699,8 +686,15 @@
       <span class="lbl">Coach</span>
     </button>
     <span class="sep"></span>
-    <button class="tbtn" data-act="merge" title="Merge selected calls into conference">
-      <svg viewBox="0 0 16 16"><path fill="none" stroke="#036" stroke-width="1.5" d="M2 3v4c0 2 2 3 4 3h4c2 0 4 1 4 3v0M2 13v-4c0-2 2-3 4-3h4c2 0 4-1 4-3v0"/></svg>
+    <button class="tbtn" data-act="merge" title="Merge selected queue calls into one conference">
+      <svg viewBox="0 0 16 16">
+        <circle cx="4" cy="5" r="1.8" fill="#036"/>
+        <circle cx="12" cy="5" r="1.8" fill="#036"/>
+        <circle cx="8" cy="3.5" r="1.8" fill="#036"/>
+        <path fill="#036" d="M1.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H1.5z"/>
+        <path fill="#036" d="M9.5 12.5c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1H9.5z"/>
+        <path fill="#036" d="M5.5 11c0-1.9 1.1-2.8 2.5-2.8s2.5.9 2.5 2.8v1.5h-5z"/>
+      </svg>
       <span class="lbl">Merge</span>
     </button>
     <button class="tbtn" data-act="addParty" title="Add number to current call / conference">
@@ -745,8 +739,7 @@
   <div class="modal">
     <div class="titlebar"><span>Blind Transfer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
-      <label>Destination (phone number, user email, or queue name)</label>
-      <input type="text" id="transferTo" placeholder="+15555551212 or user@example.com" />
+      <div id="transferPicker" class="smart-picker"></div>
     </div>
     <div class="actions">
       <button class="btn" data-close>Cancel</button>
@@ -760,44 +753,11 @@
   <div class="modal">
     <div class="titlebar"><span>Consult Transfer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
-      <div class="mtabs" id="consultTabs">
-        <div class="mtab active" data-mt="agent">Agent</div>
-        <div class="mtab" data-mt="queue">Queue</div>
-        <div class="mtab" data-mt="external">External</div>
-      </div>
-      <div class="mpanel active" data-mp="agent">
-        <label>Agent email or user id</label>
-        <input type="text" id="consultAgent" placeholder="user@example.com" />
-      </div>
-      <div class="mpanel" data-mp="queue">
-        <label>Queue</label>
-        <select id="consultQueue"></select>
-      </div>
-      <div class="mpanel" data-mp="external">
-        <label>External number</label>
-        <input type="tel" id="consultExt" placeholder="+15555551212" />
-      </div>
+      <div id="consultPicker" class="smart-picker"></div>
     </div>
     <div class="actions">
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="consultGo">Consult</button>
-    </div>
-  </div>
-</div>
-
-<!-- OUTBOUND CALL MODAL -->
-<div id="outboundModal" class="modal-backdrop">
-  <div class="modal">
-    <div class="titlebar"><span>Make Call</span><span class="sp"></span><span class="x" data-close>✕</span></div>
-    <div class="body">
-      <label>Phone number</label>
-      <input type="tel" id="outboundNumber" placeholder="+15555551212" />
-      <label>Caller ID queue (optional — dials from queue's outbound number)</label>
-      <select id="outboundQueue"><option value="">(personal)</option></select>
-    </div>
-    <div class="actions">
-      <button class="btn" data-close>Cancel</button>
-      <button class="btn btn-primary" id="outboundGo">Dial</button>
     </div>
   </div>
 </div>
@@ -1049,26 +1009,40 @@
 </div>
 
 <!-- CONFERENCE DIALER MODAL -->
-<div id="confDialerModal" class="modal-backdrop">
-  <div class="modal" style="min-width:520px;max-width:680px">
-    <div class="titlebar"><span>Conference Dialer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
+<div id="dialerModal" class="modal-backdrop">
+  <div class="modal" style="min-width:560px;max-width:720px">
+    <div class="titlebar"><span>Dialer</span><span class="sp"></span><span class="x" data-close>✕</span></div>
     <div class="body">
       <label>Outbound caller ID (optional — dials from queue's outbound number)</label>
       <select id="confFromQueue"><option value="">(personal)</option></select>
-      <label style="margin-top:12px">Participants (phone numbers)</label>
-      <div id="confPartyList"></div>
-      <button class="btn btn-sm" id="confAddRow" style="margin-top:4px">+ Add number</button>
-      <label style="margin-top:14px">Saved speed-dial groups</label>
-      <div id="confGroupList" style="max-height:22vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
-        <input type="text" id="confGroupName" placeholder="Save current numbers as group…" style="flex:1" />
-        <button class="btn btn-sm" id="confSaveGroup">Save</button>
+
+      <div class="mtabs" id="dialerTabs" style="margin-top:14px">
+        <div class="mtab active" data-mt="single">Dial</div>
+        <div class="mtab" data-mt="multi">Bridge (multi-dial)</div>
       </div>
+
+      <div class="mpanel active" data-mp="single">
+        <label>Phone number, agent, or contact</label>
+        <div id="dialerPicker" class="smart-picker"></div>
+      </div>
+
+      <div class="mpanel" data-mp="multi">
+        <label>Participants — dial all and bridge into one conference</label>
+        <div id="confPartyList"></div>
+        <button class="btn btn-sm" id="confAddRow" style="margin-top:4px">+ Add number</button>
+        <label style="margin-top:14px">Saved speed-dial groups</label>
+        <div id="confGroupList" style="max-height:22vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
+        <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+          <input type="text" id="confGroupName" placeholder="Save current numbers as group…" style="flex:1" />
+          <button class="btn btn-sm" id="confSaveGroup">Save</button>
+        </div>
+      </div>
+
       <div id="confStatus" style="margin-top:10px;font-size:11px;color:var(--win-muted)"></div>
     </div>
     <div class="actions">
       <button class="btn" data-close>Close</button>
-      <button class="btn btn-primary" id="confDialGo">Bridge All</button>
+      <button class="btn btn-primary" id="dialerGo">Dial</button>
     </div>
   </div>
 </div>
@@ -1085,24 +1059,6 @@
     <div class="actions">
       <button class="btn" data-close>Cancel</button>
       <button class="btn btn-primary" id="addPartyGo">Add</button>
-    </div>
-  </div>
-</div>
-
-<!-- MERGE CONFIRMATION MODAL -->
-<div id="mergeModal" class="modal-backdrop">
-  <div class="modal">
-    <div class="titlebar"><span>Merge / Conference</span><span class="sp"></span><span class="x" data-close>✕</span></div>
-    <div class="body">
-      <div id="mergeSummary" style="font-size:12px;margin-bottom:8px"></div>
-      <div id="mergeList" style="max-height:30vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-      <label style="margin-top:10px">Include queue-held calls (assign to me first, then merge)</label>
-      <div id="mergeQueueList" style="max-height:18vh;overflow:auto;border:1px solid var(--win-border);background:#fff;"></div>
-      <div id="mergeStatus" style="margin-top:8px;font-size:11px;color:var(--win-muted)"></div>
-    </div>
-    <div class="actions">
-      <button class="btn" data-close>Cancel</button>
-      <button class="btn btn-primary" id="mergeGo">Merge</button>
     </div>
   </div>
 </div>
@@ -2417,8 +2373,143 @@ const QUEUE_OBSERVATION_METRICS = [
 // Only call-state metrics need per-observation detail (conversation IDs).
 const QUEUE_DETAIL_METRICS = ["oWaiting", "oAlerting", "oInteracting"];
 
+// Per-queue backoff state for /analytics rate-limit recovery. Tracking
+// per-queue (not global) so a 429 on one queue doesn't pause the whole
+// dashboard, and so that the 1-call-batched path can mark just the
+// queues whose group came back hot.
+const queueBackoffUntilMs = new Map();   // queueId -> earliest next-poll ms
+const queueBackoffMs = new Map();        // queueId -> current backoff duration (doubles)
+const POLL_BACKOFF_BASE_MS = 5000;
+const POLL_BACKOFF_MAX_MS = 5 * 60 * 1000;
+function queueOnCooldown(qid) {
+  const until = queueBackoffUntilMs.get(qid);
+  return !!(until && until > Date.now());
+}
+function applyQueueBackoff(qid) {
+  const cur = queueBackoffMs.get(qid) || POLL_BACKOFF_BASE_MS;
+  const next = Math.min(cur * 2, POLL_BACKOFF_MAX_MS);
+  queueBackoffMs.set(qid, next);
+  queueBackoffUntilMs.set(qid, Date.now() + cur);
+  console.warn(`pollQueue 429 — backoff ${cur}ms for queue ${qid}`);
+}
+function resetQueueBackoff(qid) {
+  queueBackoffMs.delete(qid);
+  queueBackoffUntilMs.delete(qid);
+}
+
+// Ingest a single queue's slice of an observations/query response.
+// `body` has the shape { results: [...] }. Extracted from the original
+// pollQueue so the batched pollAllQueues can reuse it after demuxing.
+function ingestQueueObservations(queueId, body) {
+  // 1. Update stats panel (ALL metrics in the response)
+  queueStats.set(queueId, { ...(queueStats.get(queueId) || {}), ...flattenObservationEvent(body) });
+  if (queueId === activeTabQueueId || activeTabQueueIds().includes(queueId)) renderStats();
+
+  // 2. Harvest active call conversation IDs from the detail metrics
+  const seen = new Set();
+  const convIds = [];
+  for (const result of (body?.results || [])) {
+    for (const d of (result?.data || [])) {
+      if (!Array.isArray(d.observations)) continue;
+      for (const obs of d.observations) {
+        if (!obs.conversationId || seen.has(obs.conversationId)) continue;
+        seen.add(obs.conversationId);
+        convIds.push(obs.conversationId);
+        const k = d.metric === "oInteracting" ? "connected"
+                : d.metric === "oAlerting"    ? "alerting"
+                : "offering";                                   // oWaiting
+        // Only seed a placeholder for BRAND-NEW conversations. Overwriting an
+        // existing upgraded record every poll cycle wipes the resolved agent
+        // name and re-blanks the User column until the async upgrade fetch
+        // settles (and persistently if that fetch fails).
+        // The observation already carries the agent's userId for oInteracting
+        // and oAlerting (verified against SDK Observationvalue model).
+        // Resolve the name from the cache; kick off resolveUser if missing.
+        const obsUserId = obs.userId || null;
+        const obsUserName = obsUserId ? (usersById.get(obsUserId)?.name || "") : "";
+        if (obsUserId && !usersById.has(obsUserId)) {
+          resolveUser(obsUserId).then(renderAll).catch(() => {});
+        }
+        const existing = conversations.get(obs.conversationId);
+        if (existing) {
+          // Refresh state-y fields only; keep participant resolution intact.
+          existing.stateKey = k;
+          existing.queueId = queueId;
+          existing.queueName = queuesById.get(queueId)?.name || existing.queueName || queueId;
+          // Always refresh the agent assignment from the observation — it's
+          // authoritative for who the call is currently with, even if the
+          // /conversations/calls/{id} upgrade hasn't landed yet.
+          if (obsUserId) {
+            existing.assignedUserId = obsUserId;
+            existing.assignedUserName = obsUserName || existing.assignedUserName || "";
+          }
+          if (obs.direction) existing.direction = obs.direction;
+          continue;
+        }
+        const stateDisplay = k === "connected" ? "Connected"
+                           : k === "alerting"  ? "Alerting"
+                           : "In Queue";
+        const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
+        conversations.set(obs.conversationId, {
+          id: obs.conversationId,
+          name: obs.participantName || "",
+          number: obs.ani || obs.dnis || "",
+          queueId,
+          queueName: queuesById.get(queueId)?.name || queueId,
+          stateKey: k,
+          stateDisplay,
+          // Anything coming through the queue observation poll is by
+          // definition ACD-routed — that's how it ended up in the queue.
+          isAcd: true,
+          held: k === "held",
+          assignedUserId: obsUserId,
+          assignedUserName: obsUserName,
+          startTimeMs: startMs, queueEnterMs: startMs, stateChangeMs: startMs,
+          hasMe: false, disconnected: false,
+          recording: false, monitored: false,
+          station: "", line: "", type: "voice",
+          details: [obs.participantName, obs.ani].filter(Boolean).join(" · "),
+          direction: obs.direction || "",
+          waitReason: "", accountCode: "", wrapupCode: "", subject: "",
+          raw: { id: obs.conversationId, participants: [] }
+        });
+      }
+    }
+  }
+  // 3. Prune stale rows: any conversation currently in our Map tied to
+  // this queue but NOT in the live observation snapshot is gone from
+  // the queue. WS "disconnect" events can be missed on reconnect; the
+  // observations query is authoritative for what's live. Never prune
+  // the user's own calls.
+  for (const [id, r] of [...conversations]) {
+    if (r.queueId === queueId && !r.hasMe && !seen.has(id)) {
+      conversations.delete(id);
+    }
+  }
+
+  // 4. Upgrade placeholders with full participant data (for actions
+  // + agent name in the User column). Pass the queueId hint — the
+  // full conversation may have lost queueId from its participants
+  // once it moved past ACD. If an agent's name comes back on the
+  // conversation but the user isn't in usersById yet, kick off a
+  // resolveUser so future renders pick up the real name.
+  for (const id of convIds) {
+    apiFetch(`/api/v2/conversations/calls/${id}`)
+      .then(full => {
+        ingestConversation(full, queueId);
+        const agentUid = (full.participants || []).slice().reverse()
+          .find(p => p.purpose === "agent" && p.userId)?.userId;
+        if (agentUid && !usersById.get(agentUid)?.name) resolveUser(agentUid).then(renderAll).catch(() => {});
+        renderAll();
+      })
+      .catch(e => console.warn("upgrade failed for", id, e?.message || e));
+  }
+  renderAll();
+}
+
 async function pollQueue(queueId) {
   if (!queueId || typeof queueId !== "string") return;
+  if (queueOnCooldown(queueId)) return;
   try {
     const body = {
       filter: { type: "and", predicates: [
@@ -2428,120 +2519,68 @@ async function pollQueue(queueId) {
       detailMetrics: QUEUE_DETAIL_METRICS
     };
     const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
-
-    // 1. Update stats panel (ALL metrics in the response)
-    queueStats.set(queueId, { ...(queueStats.get(queueId) || {}), ...flattenObservationEvent(data) });
-    if (queueId === activeTabQueueId || activeTabQueueIds().includes(queueId)) renderStats();
-
-    // 2. Harvest active call conversation IDs from the detail metrics
-    const seen = new Set();
-    const convIds = [];
-    for (const result of (data?.results || [])) {
-      for (const d of (result?.data || [])) {
-        if (!Array.isArray(d.observations)) continue;
-        for (const obs of d.observations) {
-          if (!obs.conversationId || seen.has(obs.conversationId)) continue;
-          seen.add(obs.conversationId);
-          convIds.push(obs.conversationId);
-          const k = d.metric === "oInteracting" ? "connected"
-                  : d.metric === "oAlerting"    ? "alerting"
-                  : "offering";                                   // oWaiting
-          // Only seed a placeholder for BRAND-NEW conversations. Overwriting an
-          // existing upgraded record every poll cycle wipes the resolved agent
-          // name and re-blanks the User column until the async upgrade fetch
-          // settles (and persistently if that fetch fails).
-          // The observation already carries the agent's userId for oInteracting
-          // and oAlerting (verified against SDK Observationvalue model).
-          // Resolve the name from the cache; kick off resolveUser if missing.
-          const obsUserId = obs.userId || null;
-          const obsUserName = obsUserId ? (usersById.get(obsUserId)?.name || "") : "";
-          if (obsUserId && !usersById.has(obsUserId)) {
-            resolveUser(obsUserId).then(renderAll).catch(() => {});
-          }
-          const existing = conversations.get(obs.conversationId);
-          if (existing) {
-            // Refresh state-y fields only; keep participant resolution intact.
-            existing.stateKey = k;
-            existing.queueId = queueId;
-            existing.queueName = queuesById.get(queueId)?.name || existing.queueName || queueId;
-            // Always refresh the agent assignment from the observation — it's
-            // authoritative for who the call is currently with, even if the
-            // /conversations/calls/{id} upgrade hasn't landed yet.
-            if (obsUserId) {
-              existing.assignedUserId = obsUserId;
-              existing.assignedUserName = obsUserName || existing.assignedUserName || "";
-            }
-            if (obs.direction) existing.direction = obs.direction;
-            continue;
-          }
-          const stateDisplay = k === "connected" ? "Connected"
-                             : k === "alerting"  ? "Alerting"
-                             : "In Queue";
-          const startMs = obs.observationDate ? new Date(obs.observationDate).getTime() : Date.now();
-          conversations.set(obs.conversationId, {
-            id: obs.conversationId,
-            name: obs.participantName || "",
-            number: obs.ani || obs.dnis || "",
-            queueId,
-            queueName: queuesById.get(queueId)?.name || queueId,
-            stateKey: k,
-            stateDisplay,
-            // Anything coming through the queue observation poll is by
-            // definition ACD-routed — that's how it ended up in the queue.
-            isAcd: true,
-            held: k === "held",
-            assignedUserId: obsUserId,
-            assignedUserName: obsUserName,
-            startTimeMs: startMs, queueEnterMs: startMs, stateChangeMs: startMs,
-            hasMe: false, disconnected: false,
-            recording: false, monitored: false,
-            station: "", line: "", type: "voice",
-            details: [obs.participantName, obs.ani].filter(Boolean).join(" · "),
-            direction: obs.direction || "",
-            waitReason: "", accountCode: "", wrapupCode: "", subject: "",
-            raw: { id: obs.conversationId, participants: [] }
-          });
-        }
-      }
-    }
-    // 3. Prune stale rows: any conversation currently in our Map tied to
-    // this queue but NOT in the live observation snapshot is gone from
-    // the queue. WS "disconnect" events can be missed on reconnect; the
-    // observations query is authoritative for what's live. Never prune
-    // the user's own calls.
-    for (const [id, r] of [...conversations]) {
-      if (r.queueId === queueId && !r.hasMe && !seen.has(id)) {
-        conversations.delete(id);
-      }
-    }
-
-    // 4. Upgrade placeholders with full participant data (for actions
-    // + agent name in the User column). Pass the queueId hint — the
-    // full conversation may have lost queueId from its participants
-    // once it moved past ACD. If an agent's name comes back on the
-    // conversation but the user isn't in usersById yet, kick off a
-    // resolveUser so future renders pick up the real name.
-    for (const id of convIds) {
-      apiFetch(`/api/v2/conversations/calls/${id}`)
-        .then(full => {
-          ingestConversation(full, queueId);
-          const agentUid = (full.participants || []).slice().reverse()
-            .find(p => p.purpose === "agent" && p.userId)?.userId;
-          if (agentUid && !usersById.get(agentUid)?.name) resolveUser(agentUid).then(renderAll).catch(() => {});
-          renderAll();
-        })
-        .catch(e => console.warn("upgrade failed for", id, e?.message || e));
-    }
-    renderAll();
+    resetQueueBackoff(queueId);
+    ingestQueueObservations(queueId, data);
   } catch (e) {
     const msg = e?.message || String(e);
-    // Rate-limited — skip this round quietly. The next poll (or the API's
-    // Retry-After window) will recover on its own. Don't spam the banner.
     if (msg.includes("429") || msg.includes("too.many.requests")) {
-      console.warn("pollQueue 429 for", queueId, "— skipping this cycle");
+      applyQueueBackoff(queueId);
       return;
     }
     console.warn("pollQueue failed", queueId, e);
+    showBanner({ type: "warn", title: "Queue snapshot failed", message: msg, autoHideMs: 4000 });
+  }
+}
+
+// Single batched query for N queues per cycle. Replaces the N parallel
+// calls that used to brush the /analytics 25 req/min cap. Demultiplexes
+// the response by group.queueId; if the API doesn't include queueId in
+// result groups, falls back to per-queue calls.
+async function pollAllQueues(queueIds) {
+  const eligible = queueIds.filter(qid => qid && !queueOnCooldown(qid));
+  if (eligible.length === 0) return;
+  if (eligible.length === 1) return pollQueue(eligible[0]);
+  try {
+    const body = {
+      filter: { type: "or", predicates: eligible.map(qid =>
+        ({ type: "dimension", dimension: "queueId", operator: "matches", value: qid })
+      )},
+      metrics: QUEUE_OBSERVATION_METRICS,
+      detailMetrics: QUEUE_DETAIL_METRICS
+    };
+    const data = await apiFetch("/api/v2/analytics/queues/observations/query", { method: "POST", body });
+    eligible.forEach(resetQueueBackoff);
+    const allResults = data?.results || [];
+    const byQueue = new Map();
+    let sawQueueIdInGroup = false;
+    for (const r of allResults) {
+      const qid = r?.group?.queueId;
+      if (qid) {
+        sawQueueIdInGroup = true;
+        if (!byQueue.has(qid)) byQueue.set(qid, []);
+        byQueue.get(qid).push(r);
+      }
+    }
+    if (sawQueueIdInGroup) {
+      for (const qid of eligible) {
+        ingestQueueObservations(qid, { results: byQueue.get(qid) || [] });
+      }
+    } else {
+      // Response groups don't carry queueId — fall back to per-queue calls
+      // with stagger so we still benefit from backoff but don't break the
+      // dashboard. Logged once-per-cycle so it's obvious in the live log.
+      console.warn("pollAllQueues: no queueId in response groups; falling back to per-queue calls");
+      for (let i = 0; i < eligible.length; i++) {
+        setTimeout(() => pollQueue(eligible[i]), i * 250);
+      }
+    }
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (msg.includes("429") || msg.includes("too.many.requests")) {
+      eligible.forEach(applyQueueBackoff);
+      return;
+    }
+    console.warn("pollAllQueues failed", e);
     showBanner({ type: "warn", title: "Queue snapshot failed", message: msg, autoHideMs: 4000 });
   }
 }
@@ -2837,7 +2876,7 @@ function renderToolbar() {
     if (act === "hold") { b.classList.toggle("active", isHeld); b.firstChild.nextSibling ? (b.lastChild.textContent = isHeld ? " Unhold" : " Hold") : null; }
     if (act === "record") { b.classList.toggle("active", !!selRow?.recording); }
   };
-  enable("makeCall", true);
+  enable("dialer", true);
   enable("pickup", !!selRow && isQueue && !isMine);
   enable("hold", !!selRow && isMine);
   enable("mute", !!selRow && isMine);
@@ -2852,14 +2891,12 @@ function renderToolbar() {
   enable("record", !!selRow && (isMine || isQueue));
   enable("pause", !!selRow && (isMine || isQueue));
   enable("wrapup", !!selRow && isMine);
-  // Merge: enabled when the user has 2+ calls of their own, or when a queue
-  // call is selected alongside at least one active "my" call (assign & merge).
+  // Merge: gated strictly on 2+ queue rows being multi-selected. Single-call
+  // merges are nonsensical; the modal-based flow has been removed.
   const myCount = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).length;
-  enable("merge", myCount >= 2 || (!!selRow && (isMine || isQueue)));
+  enable("merge", queueViewSelectedIds.size >= 2);
   // Add Party: enabled whenever the user has at least one active call.
   enable("addParty", myCount >= 1 || (!!selRow && isMine));
-  // Conference Dialer: always available.
-  enable("confDialer", true);
   enable("settings", true);
 
   // Toolbar Hold label swap
@@ -2942,18 +2979,18 @@ function flattenObservationEvent(body) {
 // Back-compat alias — older call sites still say pollQueueStats.
 const pollQueueStats = pollQueue;
 
-// Single combined poll. One observations query per queue per cycle,
-// covering both the live call list and the stats-panel metrics. 20-second
-// cadence + 250ms stagger between queues stays comfortably under the
-// /analytics 25 req/min rate limit even when watching several queues.
+// Single batched poll covering ALL watched queues per cycle. One
+// /observations/query per cycle (not per queue) with OR-predicates over
+// every watched queueId, demultiplexed back into per-queue ingestion.
+// 30-second cadence; WebSocket carries the live deltas, REST is just a
+// backstop. Combined with per-queue 429 backoff this stays well under
+// the /analytics 25 req/min cap even at 20+ queues.
 let queuePollTimer = null;
 function startQueuePoll() {
   if (queuePollTimer) return;
   queuePollTimer = setInterval(() => {
-    selectedQueueIds.forEach((qid, i) => {
-      setTimeout(() => pollQueue(qid), i * 250);
-    });
-  }, 20000);
+    pollAllQueues([...selectedQueueIds]);
+  }, 30000);
 }
 // Older names that other callers already use — forward to the one timer.
 function startStatsPoll()      { startQueuePoll(); }
@@ -3466,9 +3503,8 @@ function renderQueueActionBar() {
   const n = queueViewSelectedIds.size;
   if (n < 2) { bar.style.display = "none"; return; }
   bar.style.display = "flex";
-  el("queueActionBarLabel").textContent = `${n} interactions selected for conference`;
+  el("queueActionBarLabel").textContent = `${n} interactions selected — use the Merge toolbar button to conference`;
   el("queueActionBarClear").onclick = () => { queueViewSelectedIds.clear(); renderAll(); };
-  el("queueActionBarConference").onclick = () => conferenceSelectedQueueCalls();
 }
 
 // Pull every selected queue interaction onto the current user, then
@@ -3484,8 +3520,8 @@ async function conferenceSelectedQueueCalls() {
   const ok = confirm(`Conference ${ids.length} selected interactions?\n\nEach call will be assigned to you and merged into a single conference. Audio will be in this dashboard tab.`);
   if (!ok) return;
 
-  const btn = el("queueActionBarConference");
-  if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
+  const mergeBtn = document.querySelector('.tbtn[data-act="merge"]');
+  if (mergeBtn) mergeBtn.disabled = true;
   try {
     const result = await mergeQueueCallsViaSdk(ids);
     showBanner({
@@ -3499,7 +3535,7 @@ async function conferenceSelectedQueueCalls() {
   } catch (e) {
     showBanner({ type: "error", title: "Conference failed", message: e.message, autoHideMs: 6000 });
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "Conference"; }
+    if (mergeBtn) mergeBtn.disabled = false;
   }
 }
 
@@ -3643,14 +3679,22 @@ function startDurationTick() {
 // ================================================================
 async function doAction(act, row) {
   try {
-    if (act === "makeCall") { openOutboundModal(); return; }
+    if (act === "dialer") { openDialerModal(); return; }
     if (act === "settings") { openSettings(); return; }
     if (act === "wrapup") { openWrapupModal(row); return; }
     if (act === "transfer") { openTransferModal(row); return; }
     if (act === "consult") { openConsultModal(row); return; }
     if (act === "voicemail") { await actVoicemail(row); return; }
-    if (act === "confDialer") { openConfDialerModal(); return; }
-    if (act === "merge") { openMergeModal(row); return; }
+    if (act === "merge") {
+      // Toolbar Merge fires directly off queue-row multi-select — no modal.
+      // Enable rule (updateToolbarState) ensures we only get here with 2+ rows.
+      if (queueViewSelectedIds.size < 2) {
+        showBanner({ type: "warn", title: "Select 2+ queue calls to merge", autoHideMs: 3000 });
+        return;
+      }
+      await conferenceSelectedQueueCalls();
+      return;
+    }
     if (act === "addParty") { openAddPartyModal(row); return; }
     if (act === "sendSms") { openSmsModal(); return; }
     if (act === "toggleEmergencyAlert") { toggleAlertMode(); return; }
@@ -3900,16 +3944,144 @@ document.addEventListener("click", (e) => {
 });
 
 // Transfer (blind)
+// Smart destination picker — single search input with autocomplete
+// covering agents (POST /users/search), watched queues (in-memory), and
+// raw phone numbers. Mirrors the GC native UI's transfer/consult input.
+// Mount once into a host element; returns { reset, focus, getDestination }.
+// getDestination() returns null OR { kind: 'userId'|'queueId'|'address',
+//                                    value: string, label: string }.
+const PHONE_RE = /^\+?\d[\d \-().]{5,}$/;
+const _pickerInstances = new Map();   // host element -> control
+function mountSmartDestinationPicker(host) {
+  if (!host) return null;
+  const cached = _pickerInstances.get(host);
+  if (cached) { cached.reset(); return cached; }
+  host.innerHTML = `
+    <input type="text" class="smart-picker-input" placeholder="Name, number, or queue" autocomplete="off"
+           style="width:100%;padding:6px 8px;font-size:13px;border:1px solid var(--win-border);background:#fff" />
+    <div class="smart-picker-selection"
+         style="display:none;font-size:11px;margin-top:6px;color:#1a3a6c;background:#e6eef9;border:1px solid #b4c5e0;padding:4px 6px"></div>
+    <div class="smart-picker-results"
+         style="max-height:240px;overflow:auto;border:1px solid var(--win-border);background:#fff;display:none;margin-top:4px"></div>
+  `;
+  const input = host.querySelector(".smart-picker-input");
+  const results = host.querySelector(".smart-picker-results");
+  const selectionEl = host.querySelector(".smart-picker-selection");
+  let selection = null;
+  let debounceTimer = null;
+  let activeQuery = "";
+
+  const setSelection = (kind, value, label) => {
+    selection = { kind, value, label };
+    selectionEl.textContent = `Selected: ${label}`;
+    selectionEl.style.display = "";
+    results.style.display = "none";
+    input.value = label;
+  };
+  const clearSelection = () => {
+    selection = null;
+    selectionEl.textContent = "";
+    selectionEl.style.display = "none";
+  };
+
+  const renderResults = (rows) => {
+    if (!rows.length) { results.style.display = "none"; results.innerHTML = ""; return; }
+    results.innerHTML = rows.map(r => `
+      <div class="smart-picker-row"
+           data-kind="${escape(r.kind)}" data-value="${escape(r.value)}" data-label="${escape(r.label)}"
+           style="padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--win-border);font-size:12px">
+        <span style="display:inline-block;background:#e6eef9;color:#1a3a6c;border:1px solid #b4c5e0;font-size:10px;padding:0 5px;border-radius:2px;margin-right:6px;text-transform:uppercase">${escape(r.kindLabel)}</span>
+        ${escape(r.label)}
+      </div>
+    `).join("");
+    results.style.display = "";
+    results.querySelectorAll(".smart-picker-row").forEach(node => {
+      node.onmouseenter = () => node.style.background = "var(--win-row-hover, #f0f0f0)";
+      node.onmouseleave = () => node.style.background = "";
+      node.onmousedown = (e) => { e.preventDefault(); setSelection(node.dataset.kind, node.dataset.value, node.dataset.label); };
+    });
+  };
+
+  const doSearch = async (q) => {
+    if (q !== activeQuery) return;
+    const lc = q.toLowerCase();
+    const rows = [];
+
+    // Queues — instant in-memory filter
+    for (const queue of queuesById.values()) {
+      if (!queue?.name) continue;
+      if (queue.name.toLowerCase().includes(lc)) {
+        rows.push({ kind: "queueId", value: queue.id, label: queue.name, kindLabel: "Queue" });
+        if (rows.filter(r => r.kind === "queueId").length >= 6) break;
+      }
+    }
+
+    // External — phone-number-shaped input
+    if (PHONE_RE.test(q)) {
+      rows.push({ kind: "address", value: q, label: `Send to external: ${q}`, kindLabel: "External" });
+    }
+
+    // Agents — async via /users/search
+    try {
+      const data = await apiFetch("/api/v2/users/search", {
+        method: "POST",
+        body: { query: [{ type: "TERM", fields: ["name", "email", "username"], value: q }], pageSize: 6 }
+      });
+      if (q !== activeQuery) return;
+      for (const u of (data?.results || []).slice(0, 6)) {
+        const lbl = u.name || u.email || u.id;
+        rows.push({ kind: "userId", value: u.id, label: lbl, kindLabel: "Agent" });
+      }
+    } catch { /* search may 403 in restricted scopes — silent */ }
+
+    if (q !== activeQuery) return;
+    renderResults(rows);
+  };
+
+  input.addEventListener("input", () => {
+    clearSelection();
+    const q = input.value.trim();
+    activeQuery = q;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (!q) { results.style.display = "none"; return; }
+    debounceTimer = setTimeout(() => doSearch(q), 200);
+  });
+  input.addEventListener("focus", () => { if (results.innerHTML && !selection) results.style.display = ""; });
+  input.addEventListener("blur", () => setTimeout(() => { results.style.display = "none"; }, 150));
+
+  const ctrl = {
+    reset() {
+      input.value = "";
+      activeQuery = "";
+      results.innerHTML = "";
+      results.style.display = "none";
+      clearSelection();
+    },
+    focus() { input.focus(); },
+    getDestination() {
+      if (selection) return selection;
+      const q = input.value.trim();
+      if (PHONE_RE.test(q)) return { kind: "address", value: q, label: q };
+      return null;
+    }
+  };
+  _pickerInstances.set(host, ctrl);
+  return ctrl;
+}
+
 function openTransferModal(row) {
   const convId = row.id;
   const partId = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime)?.id
               || (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime)?.id;
+  if (!partId) return showBanner({ type: "error", title: "Transfer needs an active participant leg", autoHideMs: 4000 });
   openModal("transferModal");
-  const input = el("transferTo"); input.value = ""; input.focus();
+  const picker = mountSmartDestinationPicker(el("transferPicker"));
+  picker?.focus();
   el("transferGo").onclick = async () => {
-    const to = input.value.trim(); if (!to) return;
+    const dest = picker?.getDestination();
+    if (!dest) { showBanner({ type: "warn", title: "Pick a destination", autoHideMs: 3000 }); return; }
     try {
-      const body = /^\+?\d[\d \-().]{5,}/.test(to) ? { address: to } : { userId: to };
+      const body = { [dest.kind]: dest.value };
       await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`, { method: "POST", body });
       closeModal("transferModal");
     } catch (e) { showBanner({ type: "error", title: "Transfer failed", message: e.message, autoHideMs: 5000 }); }
@@ -3922,46 +4094,129 @@ function openConsultModal(row) {
   const partId = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime)?.id;
   if (!partId) return showBanner({ type: "error", title: "Consult needs your own leg", autoHideMs: 4000 });
   openModal("consultModal");
-  const sel = el("consultQueue");
-  sel.innerHTML = [...queuesById.values()].sort((a, b) => a.name.localeCompare(b.name))
-    .map(q => `<option value="${escape(q.id)}">${escape(q.name)}</option>`).join("");
-  el("consultTabs").querySelectorAll(".mtab").forEach(t => t.onclick = () => {
-    el("consultTabs").querySelectorAll(".mtab").forEach(x => x.classList.toggle("active", x === t));
-    document.querySelectorAll("#consultModal .mpanel").forEach(p => p.classList.toggle("active", p.dataset.mp === t.dataset.mt));
-  });
+  const picker = mountSmartDestinationPicker(el("consultPicker"));
+  picker?.focus();
   el("consultGo").onclick = async () => {
+    const dest = picker?.getDestination();
+    if (!dest) { showBanner({ type: "warn", title: "Pick a destination", autoHideMs: 3000 }); return; }
     try {
-      const which = el("consultTabs").querySelector(".mtab.active").dataset.mt;
-      if (which === "agent") {
-        const to = el("consultAgent").value.trim(); if (!to) return;
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, { method: "POST", body: { speakTo: "destination", destination: { userId: to } } });
-      } else if (which === "queue") {
-        const qid = el("consultQueue").value; if (!qid) return;
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, { method: "POST", body: { speakTo: "destination", destination: { queueId: qid } } });
-      } else {
-        const to = el("consultExt").value.trim(); if (!to) return;
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, { method: "POST", body: { speakTo: "destination", destination: { address: to } } });
-      }
+      const destination = { [dest.kind]: dest.value };
+      await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, {
+        method: "POST",
+        body: { speakTo: "destination", destination }
+      });
       closeModal("consultModal");
     } catch (e) { showBanner({ type: "error", title: "Consult failed", message: e.message, autoHideMs: 5000 }); }
   };
 }
 
-// Outbound
-function openOutboundModal() {
-  openModal("outboundModal");
-  const sel = el("outboundQueue");
-  sel.innerHTML = '<option value="">(personal)</option>' +
-    [...queuesById.values()].sort((a, b) => a.name.localeCompare(b.name))
-      .map(q => `<option value="${escape(q.id)}">${escape(q.name)}</option>`).join("");
-  el("outboundGo").onclick = async () => {
-    const num = el("outboundNumber").value.trim(); if (!num) return;
-    const qid = sel.value;
-    try {
-      await createOutboundCall(num, qid || null);
-      closeModal("outboundModal");
-    } catch (e) { showBanner({ type: "error", title: "Call failed", message: e.message, autoHideMs: 5000 }); }
+// Outbound dial-by-name picker — single search input mirroring the GC
+// native UI's dialer. Searches agents (POST /users/search) and external
+// contacts (GET /externalcontacts/contacts?q=) for rows that have a
+// dialable phone number; also accepts raw phone-shaped input. Returns a
+// phone string via getPhone().
+function mountDialPicker(host) {
+  if (!host) return null;
+  const cached = _pickerInstances.get(host);
+  if (cached) { cached.reset(); return cached; }
+  host.innerHTML = `
+    <input type="text" class="smart-picker-input" placeholder="Phone number, agent name, or contact" autocomplete="off"
+           style="width:100%;padding:6px 8px;font-size:13px;border:1px solid var(--win-border);background:#fff" />
+    <div class="smart-picker-selection"
+         style="display:none;font-size:11px;margin-top:6px;color:#1a3a6c;background:#e6eef9;border:1px solid #b4c5e0;padding:4px 6px"></div>
+    <div class="smart-picker-results"
+         style="max-height:240px;overflow:auto;border:1px solid var(--win-border);background:#fff;display:none;margin-top:4px"></div>
+  `;
+  const input = host.querySelector(".smart-picker-input");
+  const results = host.querySelector(".smart-picker-results");
+  const selectionEl = host.querySelector(".smart-picker-selection");
+  let selection = null;
+  let debounceTimer = null;
+  let activeQuery = "";
+
+  const setSelection = (phone, label) => {
+    selection = { phone, label };
+    selectionEl.textContent = `Will dial: ${label} (${phone})`;
+    selectionEl.style.display = "";
+    results.style.display = "none";
+    input.value = label;
   };
+  const clearSelection = () => { selection = null; selectionEl.style.display = "none"; selectionEl.textContent = ""; };
+
+  const renderResults = (rows) => {
+    if (!rows.length) { results.style.display = "none"; results.innerHTML = ""; return; }
+    results.innerHTML = rows.map(r => `
+      <div class="smart-picker-row" data-phone="${escape(r.phone)}" data-label="${escape(r.label)}"
+           style="padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--win-border);font-size:12px">
+        <span style="display:inline-block;background:#e6eef9;color:#1a3a6c;border:1px solid #b4c5e0;font-size:10px;padding:0 5px;border-radius:2px;margin-right:6px;text-transform:uppercase">${escape(r.kindLabel)}</span>
+        ${escape(r.label)}
+        <span style="color:var(--win-muted);margin-left:6px">${escape(r.phone)}</span>
+      </div>
+    `).join("");
+    results.style.display = "";
+    results.querySelectorAll(".smart-picker-row").forEach(node => {
+      node.onmousedown = (e) => { e.preventDefault(); setSelection(node.dataset.phone, node.dataset.label); };
+      node.onmouseenter = () => node.style.background = "var(--win-row-hover, #f0f0f0)";
+      node.onmouseleave = () => node.style.background = "";
+    });
+  };
+
+  const doSearch = async (q) => {
+    if (q !== activeQuery) return;
+    const rows = [];
+    if (PHONE_RE.test(q)) {
+      rows.push({ phone: q, label: `Dial ${q}`, kindLabel: "Phone" });
+    }
+    try {
+      const data = await apiFetch("/api/v2/users/search", {
+        method: "POST",
+        body: { query: [{ type: "TERM", fields: ["name", "email"], value: q }], pageSize: 5, expand: ["primaryContactInfo"] }
+      });
+      if (q !== activeQuery) return;
+      for (const u of (data?.results || []).slice(0, 5)) {
+        const phoneEntry = (u.primaryContactInfo || []).find(c => c.mediaType === "PHONE" || c.type === "PHONE");
+        const phone = phoneEntry?.address;
+        if (!phone) continue;
+        rows.push({ phone, label: u.name || u.email || u.id, kindLabel: "Agent" });
+      }
+    } catch { /* ignore — endpoint may be scope-restricted */ }
+    try {
+      const data = await apiFetch(`/api/v2/externalcontacts/contacts?q=${encodeURIComponent(q)}&pageSize=5`);
+      if (q !== activeQuery) return;
+      for (const c of (data?.entities || []).slice(0, 5)) {
+        const phone = c.workPhone?.e164 || c.cellPhone?.e164 || c.homePhone?.e164;
+        if (!phone) continue;
+        const fullName = [c.firstName, c.lastName].filter(Boolean).join(" ").trim() || phone;
+        rows.push({ phone, label: fullName, kindLabel: "Contact" });
+      }
+    } catch { /* ignore */ }
+    if (q !== activeQuery) return;
+    renderResults(rows);
+  };
+
+  input.addEventListener("input", () => {
+    clearSelection();
+    const q = input.value.trim();
+    activeQuery = q;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (!q) { results.style.display = "none"; return; }
+    debounceTimer = setTimeout(() => doSearch(q), 200);
+  });
+  input.addEventListener("focus", () => { if (results.innerHTML && !selection) results.style.display = ""; });
+  input.addEventListener("blur", () => setTimeout(() => { results.style.display = "none"; }, 150));
+
+  const ctrl = {
+    reset() { input.value = ""; activeQuery = ""; results.innerHTML = ""; results.style.display = "none"; clearSelection(); },
+    focus() { input.focus(); },
+    getPhone() {
+      if (selection) return selection.phone;
+      const q = input.value.trim();
+      if (PHONE_RE.test(q)) return q;
+      return null;
+    }
+  };
+  _pickerInstances.set(host, ctrl);
+  return ctrl;
 }
 
 // ================================================================
@@ -3982,9 +4237,9 @@ function saveConfGroups(groups) {
 let confPartyRows = ["", ""];    // working input list (strings)
 let confActive = null;            // { conversationId, legs: [{number, state}] }
 
-function openConfDialerModal() {
-  openModal("confDialerModal");
-  // Populate queue dropdown
+function openDialerModal() {
+  openModal("dialerModal");
+  // Populate caller-ID queue dropdown (shared across single + bridge tabs)
   const sel = el("confFromQueue");
   const lastFromQueue = localStorage.getItem(STORAGE.confLastFromQueue) || "";
   sel.innerHTML = '<option value="">(personal)</option>' +
@@ -3992,6 +4247,11 @@ function openConfDialerModal() {
       .map(q => `<option value="${escape(q.id)}" ${q.id === lastFromQueue ? "selected" : ""}>${escape(q.name)}</option>`).join("");
   sel.onchange = () => localStorage.setItem(STORAGE.confLastFromQueue, sel.value);
 
+  // Mount the dial picker for the single-dial tab
+  const dialPicker = mountDialPicker(el("dialerPicker"));
+  dialPicker?.focus();
+
+  // Multi-dial state — keep at least 2 rows visible by default
   if (confPartyRows.length < 2) confPartyRows = ["", ""];
   renderConfPartyList();
   renderConfGroupList();
@@ -4011,11 +4271,35 @@ function openConfDialerModal() {
     el("confGroupName").value = "";
     renderConfGroupList();
   };
-  el("confDialGo").onclick = async () => {
-    const nums = confPartyRows.map(cleanPhone).filter(n => n.length >= 7);
-    if (nums.length < 2) { setConfStatus("Need at least 2 valid numbers."); return; }
+
+  // Tab switching: also relabels the action button so it matches the
+  // active operation (Dial vs Bridge All) — same mtab pattern used by
+  // Consult/Transfer historically.
+  const goBtn = el("dialerGo");
+  const updateActionLabel = (mt) => { goBtn.textContent = mt === "multi" ? "Bridge All" : "Dial"; };
+  el("dialerTabs").querySelectorAll(".mtab").forEach(t => t.onclick = () => {
+    el("dialerTabs").querySelectorAll(".mtab").forEach(x => x.classList.toggle("active", x === t));
+    document.querySelectorAll("#dialerModal .mpanel").forEach(p => p.classList.toggle("active", p.dataset.mp === t.dataset.mt));
+    updateActionLabel(t.dataset.mt);
+    if (t.dataset.mt === "single") dialPicker?.focus();
+  });
+  updateActionLabel("single");
+
+  goBtn.onclick = async () => {
+    const which = el("dialerTabs").querySelector(".mtab.active").dataset.mt;
     const fromQueue = el("confFromQueue").value || "";
-    await runConference(nums, fromQueue);
+    if (which === "single") {
+      const phone = dialPicker?.getPhone();
+      if (!phone) { showBanner({ type: "warn", title: "Enter a number or pick a contact", autoHideMs: 3000 }); return; }
+      try {
+        await createOutboundCall(cleanPhone(phone), fromQueue || null);
+        closeModal("dialerModal");
+      } catch (e) { showBanner({ type: "error", title: "Call failed", message: e.message, autoHideMs: 5000 }); }
+    } else {
+      const nums = confPartyRows.map(cleanPhone).filter(n => n.length >= 7);
+      if (nums.length < 2) { setConfStatus("Need at least 2 valid numbers."); return; }
+      await runConference(nums, fromQueue);
+    }
   };
 }
 
@@ -4132,67 +4416,6 @@ function openAddPartyModal(row) {
       showBanner({ type: "info", title: "Adding party", message: `Ringing ${formatPhone(num)}…`, autoHideMs: 3000 });
     } catch (e) {
       showBanner({ type: "error", title: "Add party failed", message: e.message, autoHideMs: 5000 });
-    }
-  };
-}
-
-// ================================================================
-//  Merge modal — IW-Merge style: assign queue calls to self, then conference all
-// ================================================================
-function openMergeModal(row) {
-  openModal("mergeModal");
-  const mine = [...conversations.values()].filter(r => r.hasMe && !r.disconnected);
-  const queued = [...conversations.values()].filter(r => !r.hasMe && !r.disconnected && r.queueId && selectedQueueIds.includes(r.queueId));
-  const sel = new Set(mine.map(r => r.id));
-  const queuedSel = new Set();
-  if (row && row.hasMe) sel.add(row.id);
-  if (row && !row.hasMe) queuedSel.add(row.id);
-
-  const renderLists = () => {
-    el("mergeSummary").textContent = `${sel.size} of your active call(s) + ${queuedSel.size} queue call(s) will be conferenced.`;
-    el("mergeList").innerHTML = mine.length === 0
-      ? '<div class="empty-msg" style="padding:8px">No active calls of your own</div>'
-      : mine.map(r => `<label class="queue-picker-item">
-          <input type="checkbox" data-my="${escape(r.id)}" ${sel.has(r.id) ? "checked" : ""}/>
-          ${escape(r.name || r.number || r.id)}
-          <span style="color:var(--win-muted);margin-left:8px">${escape(r.stateDisplay)}</span>
-        </label>`).join("");
-    el("mergeQueueList").innerHTML = queued.length === 0
-      ? '<div class="empty-msg" style="padding:8px">No queue calls in monitored queues</div>'
-      : queued.map(r => `<label class="queue-picker-item">
-          <input type="checkbox" data-q="${escape(r.id)}" ${queuedSel.has(r.id) ? "checked" : ""}/>
-          ${escape(r.name || r.number || r.id)}
-          <span style="color:var(--win-muted);margin-left:8px">${escape(r.queueName)}</span>
-        </label>`).join("");
-    el("mergeList").querySelectorAll("input[data-my]").forEach(cb => cb.onchange = () => {
-      cb.checked ? sel.add(cb.dataset.my) : sel.delete(cb.dataset.my); renderLists();
-    });
-    el("mergeQueueList").querySelectorAll("input[data-q]").forEach(cb => cb.onchange = () => {
-      cb.checked ? queuedSel.add(cb.dataset.q) : queuedSel.delete(cb.dataset.q); renderLists();
-    });
-  };
-  renderLists();
-
-  el("mergeGo").onclick = async () => {
-    const status = el("mergeStatus");
-    try {
-      const ids = [...new Set([...sel, ...queuedSel])];
-      if (ids.length < 2) {
-        status.textContent = "Pick at least 2 calls to merge.";
-        return;
-      }
-      status.textContent = `Merging ${ids.length} calls…`;
-      const result = await mergeQueueCallsViaSdk(ids);
-      showBanner({
-        type: "info",
-        title: "Merge requested",
-        message: `Conferenced ${result.merged} calls${result.failed?.length ? `; ${result.failed.length} skipped: ${result.failed.map(f => f.err).join("; ")}` : ""}.`,
-        autoHideMs: 4000
-      });
-      closeModal("mergeModal");
-    } catch (e) {
-      status.textContent = `Merge failed: ${e.message}`;
-      showBanner({ type: "error", title: "Merge failed", message: e.message, autoHideMs: 6000 });
     }
   };
 }
@@ -4662,8 +4885,7 @@ function wireMenuBar() {
 
 function handleMenuCmd(cmd) {
   switch (cmd) {
-    case "makeCall": openOutboundModal(); break;
-    case "confDialer": openConfDialerModal(); break;
+    case "dialer": openDialerModal(); break;
     case "sendSms": openSmsModal(); break;
     case "manageWorkspaces": openWorkspacesModal(); break;
     case "userGuide": openModal("userGuideModal"); break;
@@ -5324,6 +5546,26 @@ async function mergeQueueCallsViaSdk(ids) {
   if (!currentUser?.id) throw new Error("No current user");
   if (!ids || ids.length < 2) throw new Error("Need 2+ calls to conference");
 
+  // 20-participant ceiling — Alex + 19 callers on one bridge. ensureMaxConf()
+  // pulls the actual GC org limit and is used as a tighter ceiling if the
+  // server reports lower. Caller-facing error so the user knows why.
+  const myActive = [...conversations.values()].filter(r => r.hasMe && !r.disconnected).length;
+  const projected = (myActive || 1) + ids.filter(id => !conversations.get(id)?.hasMe).length;
+  const HARD_CAP = 20;
+  if (projected > HARD_CAP) {
+    throw new Error(`Cannot merge ${projected} parties — limit is ${HARD_CAP} participants per conference.`);
+  }
+  try {
+    const orgMax = await ensureMaxConf();
+    if (orgMax && projected > orgMax) {
+      throw new Error(`Cannot merge ${projected} parties — your GC org limit is ${orgMax}.`);
+    }
+  } catch (e) {
+    // ensureMaxConf has its own try/catch fallback, but rethrow our own
+    // explicit error if it bubbled up.
+    if (e?.message?.startsWith("Cannot merge")) throw e;
+  }
+
   // 1. Refresh from API so we know which selected ids are already ours.
   try { await seedMyInteractions(); } catch {}
 
@@ -5967,6 +6209,9 @@ function switchMyTab(tab) {
 // ================================================================
 //  ROLE GATE — hide Listen / Coach / Join unless supervisor
 // ================================================================
+const SUPERVISOR_ROLE_IDS = new Set([
+  "f29aa818-c749-4db7-9303-5edfd098d247", // UVA Health "Supervisor"
+]);
 async function fetchMyRoles() {
   if (!currentUser?.id) return;
   // Do NOT use apiFetch — it auto-redirects on 401, and this background
@@ -5984,6 +6229,7 @@ async function fetchMyRoles() {
       const r = await resp.json();
       const roleList = r?.roles || r?.entities || (Array.isArray(r) ? r : []);
       userIsSupervisor = roleList.some(role => {
+        if (role.id && SUPERVISOR_ROLE_IDS.has(role.id)) return true;
         const n = (role.name || "").toLowerCase();
         return n.includes("supervisor") || n.includes("admin") || n.includes("manager");
       });
