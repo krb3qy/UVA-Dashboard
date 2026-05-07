@@ -1577,6 +1577,9 @@ const gcSdkSessions = new Map();   // convId → {sessionId, hasMedia, mute, hol
 // a call. Distinct from autoConnectSessions:true which only auto-accepts
 // when the GC server flags the alert as autoAnswer (acdAutoAnswer on user).
 const sdkAutoAcceptIds = new Set();
+// Per-conversation guard: prevents pickup from firing concurrent /assigns
+// when the user clicks the toolbar button or alert pickup multiple times.
+const pickupInFlight = new Set();
 // Active SDK ringtone state — keyed by convId. We synthesize a phone-ring
 // pattern via Web Audio API so we don't need an audio file. Only rings
 // if no alert banner is currently firing for the same conv (otherwise
@@ -3828,62 +3831,110 @@ async function doAction(act, row) {
         break;
       }
       case "pickup": {
-        // If the SDK is already alerting us on this call, accept directly.
-        const tryAcceptPending = async (cid) => {
-          const sess = gcSdkSessions.get(cid);
-          const sid = sess?.sessionId;
-          if (!sid) return false;
-          const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
-          if (!accept) return false;
-          await accept(sid);
-          stopSdkRingtone(cid);
-          seedConvWithRetry(cid, 3, 700);
-          return true;
-        };
-
-        if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
-          if (await tryAcceptPending(convId)) break;
+        // Per-conversation in-flight guard. Logs (2026-05-07) show users
+        // click pickup multiple times in <1s — the first /assign succeeds,
+        // subsequent ones get "already assigned", and the SDK alert times
+        // out under the spam, kicking the user into NOT_RESPONDING.
+        if (pickupInFlight.has(convId)) {
+          dlog.info("doAction", "pickup already in flight — ignoring duplicate click", { convId });
+          return;
         }
-        const why = assignEligibilityError(convId);
-        if (why) throw new Error(why);
+        pickupInFlight.add(convId);
+        try {
+          // If the SDK is already alerting us on this call, accept directly.
+          const tryAcceptPending = async (cid) => {
+            const sess = gcSdkSessions.get(cid);
+            const sid = sess?.sessionId;
+            if (!sid) return false;
+            const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
+            if (!accept) return false;
+            await accept(sid);
+            stopSdkRingtone(cid);
+            seedConvWithRetry(cid, 3, 700);
+            return true;
+          };
 
-        // Auto-flip on-queue if needed, validate station + queue membership.
-        await ensureAssignReady(convId);
-
-        // After going on-queue, GC's routing engine often routes the
-        // queued call to us automatically — adding us as a participant
-        // and firing the SDK propose within ~1-2s. If we beat that with
-        // /assign, GC 400s with 'Targeted User ID is not valid' because
-        // we're already targeted. Wait up to 3s for the pendingSession
-        // to land and accept it. Only fall through to /assign if it
-        // doesn't arrive.
-        if (gcSdkReady) {
-          const deadline = Date.now() + 3000;
-          while (Date.now() < deadline) {
-            if (sdkHasSession(convId) && !sdkSessionLive(convId)) {
-              dlog.info("doAction", "pickup: pendingSession arrived after ensureAssignReady — accepting", { convId });
-              if (await tryAcceptPending(convId)) return;
-              break;
-            }
-            // Check the conversation directly: if Alex is already a
-            // live participant (any state), GC has accepted the route —
-            // just wait for the SDK propose.
-            await new Promise(r => setTimeout(r, 250));
-          }
-          dlog.info("doAction", "pickup: no pendingSession after ready — falling through to /assign", { convId });
-        }
-
-        if (gcSdkReady) sdkAutoAcceptIds.add(convId);
-        try { await assignCallToMe(convId); }
-        catch (e) {
-          sdkAutoAcceptIds.delete(convId);
-          // If GC says target not valid and we have a pendingSession
-          // by now, accept that instead.
-          if (/invalid\.id|Targeted User ID/.test(e.message) && gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
-            dlog.warn("doAction", "pickup: /assign 400 — falling back to acceptPendingSession", { convId });
+          if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
             if (await tryAcceptPending(convId)) return;
           }
-          throw e;
+          const why = assignEligibilityError(convId);
+          if (why) throw new Error(why);
+
+          // Auto-flip on-queue if needed, validate station + queue membership.
+          await ensureAssignReady(convId);
+
+          // After going on-queue, GC's routing engine often routes the
+          // queued call to us automatically — adding us as a participant
+          // and firing the SDK propose within ~1-2s. If we beat that with
+          // /assign, GC 400s with 'Targeted User ID is not valid' because
+          // we're already targeted. Wait up to 3s for the pendingSession
+          // to land and accept it. Only fall through to /assign if it
+          // doesn't arrive.
+          if (gcSdkReady) {
+            const deadline = Date.now() + 3000;
+            while (Date.now() < deadline) {
+              if (sdkHasSession(convId) && !sdkSessionLive(convId)) {
+                dlog.info("doAction", "pickup: pendingSession arrived after ensureAssignReady — accepting", { convId });
+                if (await tryAcceptPending(convId)) return;
+                break;
+              }
+              await new Promise(r => setTimeout(r, 250));
+            }
+            dlog.info("doAction", "pickup: no pendingSession after ready — falling through to /assign", { convId });
+          }
+
+          const doAssign = async () => {
+            if (gcSdkReady) sdkAutoAcceptIds.add(convId);
+            try { await assignCallToMe(convId); return { ok: true }; }
+            catch (e) {
+              sdkAutoAcceptIds.delete(convId);
+              return { ok: false, err: e };
+            }
+          };
+
+          let result = await doAssign();
+          if (!result.ok) {
+            const msg = result.err?.message || "";
+            // Already assigned to us → success path. Accept SDK session if present.
+            if (/already assigned to agent/i.test(msg)) {
+              dlog.info("doAction", "pickup: /assign 'already assigned' — treating as success", { convId });
+              if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+                await tryAcceptPending(convId).catch(() => {});
+              }
+              return;
+            }
+            // NOT_RESPONDING → flip routing to IDLE and retry once.
+            if (/NOT_RESPONDING/i.test(msg) || /invalid\.status/i.test(msg)) {
+              dlog.warn("doAction", "pickup: /assign returned NOT_RESPONDING — flipping routing and retrying", { convId });
+              try {
+                await apiFetch(`/api/v2/users/${currentUser.id}/routingstatus`, {
+                  method: "PUT", body: { status: "IDLE" }
+                });
+                await waitForRoutingStatus(["IDLE"], 4000);
+              } catch (flipErr) {
+                dlog.error("doAction", "pickup: routing flip failed", { msg: flipErr.message });
+                throw result.err;
+              }
+              result = await doAssign();
+              if (result.ok) return;
+              const m2 = result.err?.message || "";
+              if (/already assigned to agent/i.test(m2)) {
+                if (gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+                  await tryAcceptPending(convId).catch(() => {});
+                }
+                return;
+              }
+              throw result.err;
+            }
+            // Targeted User ID not valid + we have a pendingSession → accept it
+            if (/invalid\.id|Targeted User ID/i.test(msg) && gcSdkReady && sdkHasSession(convId) && !sdkSessionLive(convId)) {
+              dlog.warn("doAction", "pickup: /assign 400 — falling back to acceptPendingSession", { convId });
+              if (await tryAcceptPending(convId)) return;
+            }
+            throw result.err;
+          }
+        } finally {
+          pickupInFlight.delete(convId);
         }
         break;
       }
@@ -4074,6 +4125,9 @@ function openTransferModal(row) {
   const partId = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime)?.id
               || (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime)?.id;
   if (!partId) return showBanner({ type: "error", title: "Transfer needs an active participant leg", autoHideMs: 4000 });
+  // GC enforces transferType:Attended on ACD-routed calls. Detect by
+  // presence of a live purpose='acd' participant on the conversation.
+  const isAcd = (row.raw.participants || []).some(p => p.purpose === "acd" && !p.endTime);
   openModal("transferModal");
   const picker = mountSmartDestinationPicker(el("transferPicker"));
   picker?.focus();
@@ -4082,6 +4136,7 @@ function openTransferModal(row) {
     if (!dest) { showBanner({ type: "warn", title: "Pick a destination", autoHideMs: 3000 }); return; }
     try {
       const body = { [dest.kind]: dest.value };
+      if (isAcd) body.transferType = "Attended";
       await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`, { method: "POST", body });
       closeModal("transferModal");
     } catch (e) { showBanner({ type: "error", title: "Transfer failed", message: e.message, autoHideMs: 5000 }); }
