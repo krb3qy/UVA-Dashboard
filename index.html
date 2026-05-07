@@ -5431,23 +5431,27 @@ async function mergeQueueCallsViaSdk(ids) {
     return true;
   };
 
-  // Wait until this conv is fully accepted. Two distinct paths:
+  // Wait until this conv is fully accepted. Three paths:
   //   (A) Cold pickup — SDK gets a propose, sessionStarted fires,
-  //       hasMedia=true. Fast (< 2s typical).
+  //       hasMedia=true. Fast.
   //   (B) Multiplex — agent already on a softphone session. GC adds
-  //       this call onto the existing session (no new SDK propose).
-  //       Audio path comes up via re-INVITE; can take 15-25s in practice.
-  //       Detected only via WS / API: my participant connected.
+  //       call to existing session via re-INVITE; no SDK propose fires
+  //       in v6.1.7. Alex's participant on the new conv stays in
+  //       alerting until something forces connected. We fix this by
+  //       proactively PATCH state=connected once we see his alerting
+  //       leg via API.
+  //   (C) WS lag — eventual conversation update flips hasMe.
   //
-  // Authoritative signals:
-  //   - sdkSessionLive(id)          → path A, media flowing locally
-  //   - conversations[id].hasMe     → either path, server confirmed us
-  //
-  // Poll the API directly every 800ms in case WS lags. 30s timeout
-  // covers the slow multiplex case.
-  const waitForAccepted = async (id, timeoutMs = 30000) => {
+  // Verified in swagger.json:
+  //   - MediaParticipantRequest.state enum allows 'connected'
+  //   - 400 error codes for PATCH /participants list `hold.alerting`
+  //     for held=true but NO analogous restriction for state=connected
+  //     on an alerting participant. The state-transition is the legacy
+  //     answer-the-alert REST verb.
+  const waitForAccepted = async (id, timeoutMs = 15000) => {
     const start = Date.now();
     let lastApiCheck = 0;
+    let forcedConnect = false;
     while (Date.now() - start < timeoutMs) {
       if (sdkSessionLive(id)) return true;
       const r = conversations.get(id);
@@ -5460,13 +5464,30 @@ async function mergeQueueCallsViaSdk(ids) {
         lastApiCheck = now;
         try {
           const c = await apiFetch(`/api/v2/conversations/calls/${id}`);
-          const myConnected = (c?.participants || []).some(p => {
+          const parts = c?.participants || [];
+          const myLeg = parts.filter(p => {
             const uid = p.userId || p.user?.id;
-            if (uid !== currentUser?.id || p.endTime) return false;
-            const st = (p.state || "").toLowerCase();
-            return st === "connected" || st === "held";
-          });
-          if (myConnected) return true;
+            return uid === currentUser?.id && !p.endTime;
+          }).pop();
+          if (myLeg) {
+            const st = (myLeg.state || "").toLowerCase();
+            if (st === "connected" || st === "held") return true;
+            // Alerting/dialing/contacting and we've waited > 2s — force
+            // PATCH state=connected. v6 SDK doesn't deliver a propose
+            // in multiplex mode; this is the authorized REST equivalent
+            // (no documented error code prevents it).
+            if (!forcedConnect && (st === "alerting" || st === "dialing" || st === "contacting" || st === "offering") && (now - start) > 2000) {
+              forcedConnect = true;
+              dlog.info("waitForAccepted", "forcing connected via REST (SDK propose absent)", { id, partId: myLeg.id, fromState: st });
+              try {
+                await apiFetch(`/api/v2/conversations/calls/${id}/participants/${myLeg.id}`, {
+                  method: "PATCH", body: { state: "connected" }
+                });
+              } catch (e) {
+                dlog.warn("waitForAccepted", "force-connect PATCH failed", { id, msg: e.message });
+              }
+            }
+          }
         } catch {}
       }
       await new Promise(r => setTimeout(r, 300));
