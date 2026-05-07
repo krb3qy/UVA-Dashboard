@@ -2858,7 +2858,7 @@ function setSplitMode(mode) {
   renderAll();
   if (splitMode !== "single") {
     const b = queueTabsB.find(t => t.id === activeTabIdB);
-    if (b) for (const qid of b.queueIds) pollQueue(qid).catch(() => {});
+    if (b) pollAllQueues(b.queueIds).catch(() => {});
   }
   refreshSubscriptions().catch(() => {});
 }
@@ -4724,7 +4724,7 @@ function openCreateGroupModal(opts = {}) {
     renderTabGroupsSection();
     renderQueueList(el("queueSearch")?.value || "");
     refreshSubscriptions().catch(() => {});
-    for (const qid of qids) seedQueueCalls(qid).catch(() => {});
+    pollAllQueues(qids).catch(() => {});
     // Refresh queue members for the (now possibly larger) active tab so
     // the directory + Workgroup Stats agent counts reflect the newly-added
     // queues' members, not just the prior set.
@@ -5115,10 +5115,8 @@ function wireRowSelection() {
         refreshDerivedQueueState();
         saveQueueTabs();
         // Seed every queue in the tab + refresh members for its primary queue.
-        // pollQueue covers both call list and stats panel in one request.
-        for (const qid of activeTabQueueIds()) {
-          pollQueue(qid).catch(() => {});
-        }
+        // pollAllQueues batches the call list + stats query into one request.
+        pollAllQueues(activeTabQueueIds()).catch(() => {});
         fetchActiveTabMembers();
         refreshSubscriptions().catch(() => {});
         renderAll();
@@ -6032,9 +6030,12 @@ function assignEligibilityError(_convId) {
 
 // Add a participant (phone number) to an existing call conversation.
 // Used for conference dialing and bridge/add-party.
+// Body shape per swagger: { participants: [{address, name?}] }. The flat
+// {address} body returns 400 "Must provide at least one participant to add".
 async function addParticipantToCall(convId, phoneNumber, name) {
-  const body = { address: phoneNumber };
-  if (name) body.name = name;
+  const p = { address: phoneNumber };
+  if (name) p.name = name;
+  const body = { participants: [p] };
   return apiFetch(`/api/v2/conversations/calls/${convId}/participants`, { method: "POST", body });
 }
 
@@ -6349,7 +6350,7 @@ async function applyWorkspace(ws) {
   try { localStorage.setItem(STORAGE.statsGroupState, JSON.stringify(statsGroupState)); } catch {}
   renderAll();
   try { await refreshSubscriptions(); } catch {}
-  for (const qid of selectedQueueIds) seedQueueCalls(qid).catch(() => {});
+  pollAllQueues([...selectedQueueIds]).catch(() => {});
   fetchActiveTabMembers();
 }
 function saveActiveWorkspaceChanges() {
@@ -7197,12 +7198,9 @@ async function init() {
     if (!activeTabId && queueTabs.length > 0) { activeTabId = queueTabs[0].id; refreshDerivedQueueState(); }
     await ensureChannel();
     await refreshSubscriptions();
-    // Seed every watched queue with current-call snapshot (WS doesn't backfill).
-    // pollQueue is the single combined observation request per queue.
-    // Stagger so the initial burst stays under the rate limit.
-    selectedQueueIds.forEach((qid, i) => {
-      setTimeout(() => pollQueue(qid).catch(() => {}), i * 250);
-    });
+    // Seed every watched queue with current-call snapshot (WS doesn't
+    // backfill). pollAllQueues batches the lot into one /observations/query.
+    pollAllQueues([...selectedQueueIds]).catch(() => {});
     fetchActiveTabMembers();
     startQueuePoll();
     // Preload call history so the tab count isn't a misleading 0 before first click.
