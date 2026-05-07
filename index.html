@@ -5474,21 +5474,66 @@ async function mergeQueueCallsViaSdk(ids) {
     return false;
   };
 
-  // PHASE A: drain ANY pending SDK session — selected or not. GC's
-  // routing engine often auto-routes an UNSELECTED queued call to us
-  // when we go on-queue (during ensureAssignReady's presence flip).
-  // That pending session blocks every subsequent /assign with
-  // "User is pending on conversation X". Walk gcSdkSessions itself,
-  // not just the selected ids.
+  // PHASE A: drain ANY pending pickup state before /assigning anything
+  // else. GC's routing engine often auto-routes an unselected queued
+  // call to us during ensureAssignReady's on-queue flip. While that
+  // call is in `alerting` state on Alex's leg, the server tracks Alex
+  // as "pending on conversation X" and rejects every other /assign
+  // with operation.failed.
+  //
+  // Two recovery paths, tried in order per stuck conv:
+  //   1. SDK accept — if pendingSessions[sid] is still alive, joins
+  //      the call (we'd have wanted to anyway if it's selected).
+  //   2. REST decline — PATCH state=disconnected on Alex's alerting
+  //      leg. Verified in swagger: no alerting-state restriction on
+  //      disconnect (only `hold.alerting` exists for held=true). Once
+  //      Alex's leg is disconnected, server-side pending block clears.
+  const drainOne = async (cid) => {
+    let cleared = false;
+    if (gcSdkReady && sdkHasSession(cid) && !sdkSessionLive(cid)) {
+      try {
+        await tryAcceptPending(cid);
+        cleared = await waitForAccepted(cid, 5000);
+      } catch (e) {
+        dlog.warn("merge", "drain SDK accept failed; falling through to REST decline", { cid, msg: e.message });
+      }
+    }
+    if (cleared) return true;
+    try {
+      const c = await apiFetch(`/api/v2/conversations/calls/${cid}`);
+      const myLeg = (c?.participants || []).filter(p => {
+        const uid = p.userId || p.user?.id;
+        if (uid !== currentUser?.id || p.endTime) return false;
+        const st = (p.state || "").toLowerCase();
+        return st === "alerting" || st === "dialing" || st === "contacting" || st === "offering";
+      }).pop();
+      if (myLeg) {
+        dlog.info("merge", "drain via REST decline", { cid, partId: myLeg.id, state: myLeg.state });
+        await apiFetch(`/api/v2/conversations/calls/${cid}/participants/${myLeg.id}`, {
+          method: "PATCH", body: { state: "disconnected" }
+        });
+        await new Promise(r => setTimeout(r, 800));
+        // Local state cleanup
+        gcSdkSessions.delete(cid);
+        sdkAutoAcceptIds.delete(cid);
+        stopSdkRingtone(cid);
+        return true;
+      }
+      dlog.warn("merge", "drain: no alerting leg to decline", { cid });
+    } catch (e) {
+      dlog.warn("merge", "drain REST decline failed", { cid, msg: e.message });
+    }
+    return false;
+  };
+
   for (let pass = 0; pass < 2; pass++) {
     if (!gcSdkReady) break;
     const pendingIds = [...gcSdkSessions.entries()]
       .filter(([cid, s]) => !s.hasMedia)
       .map(([cid]) => cid);
     for (const id of pendingIds) {
-      dlog.info("merge", "draining pendingSession before assigns", { id, selected: ids.includes(id) });
-      try { await tryAcceptPending(id); } catch (e) { dlog.warn("merge", "drain accept failed", { id, msg: e.message }); }
-      await waitForAccepted(id, 5000);
+      dlog.info("merge", "draining pending pickup state", { id, selected: ids.includes(id) });
+      await drainOne(id);
     }
     await new Promise(r => setTimeout(r, 500));
     const stillPending = [...gcSdkSessions.values()].some(s => !s.hasMedia);
