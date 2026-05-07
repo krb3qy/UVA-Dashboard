@@ -5543,31 +5543,39 @@ async function mergeQueueCallsViaSdk(ids) {
         dlog.warn("merge", "/assign rejected — pending on another conv; clearing it then retrying", { id, stuckId });
         let cleared = false;
         try {
+          // Try SDK accept first — if it throws, swallow and continue
+          // to REST decline.
           if (gcSdkReady && sdkHasSession(stuckId) && !sdkSessionLive(stuckId)) {
-            await tryAcceptPending(stuckId);
-            cleared = await waitForAccepted(stuckId, 8000);
+            try {
+              await tryAcceptPending(stuckId);
+              cleared = await waitForAccepted(stuckId, 8000);
+            } catch (sdkErr) {
+              dlog.warn("merge", "SDK accept of stuck pending failed; falling through to REST", { stuckId, msg: sdkErr.message });
+            }
           }
           if (!cleared) {
-            // SDK doesn't know about it (no propose received) — go
-            // through REST. Fetch the conversation, find Alex's
-            // alerting/dialing/contacting leg, force-disconnect it.
-            const c = await apiFetch(`/api/v2/conversations/calls/${stuckId}`);
-            const myLeg = (c?.participants || []).filter(p => {
-              const uid = p.userId || p.user?.id;
-              if (uid !== currentUser?.id || p.endTime) return false;
-              const st = (p.state || "").toLowerCase();
-              return st === "alerting" || st === "dialing" || st === "contacting" || st === "offering";
-            }).pop();
-            if (myLeg) {
-              dlog.info("merge", "disconnecting stuck pending participant", { stuckId, partId: myLeg.id, state: myLeg.state });
-              await apiFetch(`/api/v2/conversations/calls/${stuckId}/participants/${myLeg.id}`, {
-                method: "PATCH", body: { state: "disconnected" }
-              });
-              // Brief settle so server-side pending state clears.
-              await new Promise(r => setTimeout(r, 800));
-              cleared = true;
-            } else {
-              dlog.warn("merge", "no stuck-pending participant found via REST", { stuckId });
+            // REST decline: PATCH state=disconnected on Alex's
+            // alerting/dialing/contacting leg of the stuck conv.
+            try {
+              const c = await apiFetch(`/api/v2/conversations/calls/${stuckId}`);
+              const myLeg = (c?.participants || []).filter(p => {
+                const uid = p.userId || p.user?.id;
+                if (uid !== currentUser?.id || p.endTime) return false;
+                const st = (p.state || "").toLowerCase();
+                return st === "alerting" || st === "dialing" || st === "contacting" || st === "offering";
+              }).pop();
+              if (myLeg) {
+                dlog.info("merge", "disconnecting stuck pending participant via REST", { stuckId, partId: myLeg.id, state: myLeg.state });
+                await apiFetch(`/api/v2/conversations/calls/${stuckId}/participants/${myLeg.id}`, {
+                  method: "PATCH", body: { state: "disconnected" }
+                });
+                await new Promise(r => setTimeout(r, 800));
+                cleared = true;
+              } else {
+                dlog.warn("merge", "no stuck-pending participant found via REST", { stuckId, participantStates: (c?.participants || []).map(p => ({uid: p.userId || p.user?.id, state: p.state, end: !!p.endTime})) });
+              }
+            } catch (restErr) {
+              dlog.warn("merge", "REST decline failed", { stuckId, msg: restErr.message });
             }
           }
           if (!cleared) throw new Error(`Could not clear stuck pending on ${stuckId}`);
