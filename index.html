@@ -1624,19 +1624,20 @@ const sdkSessionHeld  = (cid) => !!gcSdkSessions.get(cid)?.hold;
 // old model. Multi-queue tabs show calls from any included queue and can
 // be renamed. Division-scoped tabs auto-populate their queueIds with every
 // queue in that division.
-// One shared tab list across both panes. Each pane only tracks its own
-// active tab id — adding/removing/editing tabs in either pane updates the
-// shared list and both panes see the change. Previously the two panes had
-// independent tab lists; user feedback (updates v50.txt) called that out
-// as confusing because configuring a queue tab in one split mode didn't
-// carry to the other.
+// queueTabs is the pane A / single-view tab list (same set — single view IS
+// pane A). queueTabsB is pane B's independent tab list, only used when
+// splitMode != "single". On first split-on, B is seeded from A so the user
+// has something to start from; from then on B is independent so users can
+// watch a different set of queues on the right/bottom while keeping the
+// left/top showing their canonical single-view tabs.
 let queueTabs = [];                // [{ id, name, queueIds:[], divisionId?:string }]
+let queueTabsB = [];               // pane B's independent tab list (split modes only)
 let activeTabId = null;            // active tab in pane A (always rendered)
 let activeTabIdB = null;           // active tab in pane B (only used when splitMode != "single")
 let splitMode = "single";          // "single" | "v" (side-by-side) | "h" (stacked)
 
-function tabsForPane(_paneId) { return queueTabs; }
-function setTabsForPane(_paneId, arr) { queueTabs = arr; }
+function tabsForPane(paneId) { return paneId === "b" ? queueTabsB : queueTabs; }
+function setTabsForPane(paneId, arr) { if (paneId === "b") queueTabsB = arr; else queueTabs = arr; }
 // Legacy derived: selectedQueueIds = union of queueIds across all tabs.
 // activeTabQueueId = primary queue of the active tab (first in its queueIds).
 let selectedQueueIds = [];
@@ -1646,6 +1647,11 @@ let divisionsById = new Map();     // cache
 function refreshDerivedQueueState() {
   const union = new Set();
   for (const t of queueTabs) for (const q of t.queueIds) union.add(q);
+  // Only fold in pane B's queues when split is active — in single view we
+  // shouldn't be polling/subscribing to pane B's queues at all.
+  if (splitMode !== "single") {
+    for (const t of queueTabsB) for (const q of t.queueIds) union.add(q);
+  }
   selectedQueueIds = [...union];
   const t = queueTabs.find(x => x.id === activeTabId);
   activeTabQueueId = (t && t.queueIds[0]) || null;
@@ -1673,6 +1679,7 @@ function newTabId() { return "t_" + Math.random().toString(36).slice(2, 10); }
 
 function saveQueueTabs() {
   try { localStorage.setItem("gc_uvad_queue_tabs_v2", JSON.stringify(queueTabs)); } catch {}
+  try { localStorage.setItem("gc_uvad_queue_tabs_b", JSON.stringify(queueTabsB)); } catch {}
   try { localStorage.setItem("gc_uvad_queue_tabs_active", activeTabId || ""); } catch {}
   try { localStorage.setItem("gc_uvad_queue_tabs_active_b", activeTabIdB || ""); } catch {}
   try { localStorage.setItem("gc_uvad_split_mode", splitMode); } catch {}
@@ -1682,6 +1689,10 @@ function loadQueueTabs() {
     const raw = localStorage.getItem("gc_uvad_queue_tabs_v2");
     if (raw) { queueTabs = JSON.parse(raw) || []; }
   } catch { queueTabs = []; }
+  try {
+    const rawB = localStorage.getItem("gc_uvad_queue_tabs_b");
+    if (rawB) { queueTabsB = JSON.parse(rawB) || []; }
+  } catch { queueTabsB = []; }
   try { activeTabId = localStorage.getItem("gc_uvad_queue_tabs_active") || null; } catch {}
   try { activeTabIdB = localStorage.getItem("gc_uvad_queue_tabs_active_b") || null; } catch {}
   try {
@@ -1696,9 +1707,9 @@ function loadQueueTabs() {
       if (queueTabs.length > 0) activeTabId = queueTabs[0].id;
     } catch {}
   }
-  // Sanity: both pane active-ids must point at a tab in the shared list.
+  // Sanity: each pane's active-id must point at a tab in that pane's list.
   if (!queueTabs.find(t => t.id === activeTabId)) activeTabId = queueTabs[0]?.id || null;
-  if (!queueTabs.find(t => t.id === activeTabIdB)) activeTabIdB = queueTabs[0]?.id || null;
+  if (!queueTabsB.find(t => t.id === activeTabIdB)) activeTabIdB = queueTabsB[0]?.id || null;
   refreshDerivedQueueState();
 }
 let selectedCallId = null;
@@ -2914,21 +2925,28 @@ function renderTabs() {
 
 function setSplitMode(mode) {
   if (mode !== "single" && mode !== "v" && mode !== "h") return;
+  const wasSingle = splitMode === "single";
   splitMode = mode;
-  // Both panes share queueTabs. Pane B just needs an active-tab default.
   if (splitMode !== "single") {
-    if (!queueTabs.find(t => t.id === activeTabIdB)) {
-      // Default to pane A's tab so the user sees the same content side-by-side
-      // until they explicitly switch tabs in pane B.
-      activeTabIdB = activeTabId || queueTabs[0]?.id || null;
+    // First time entering split (or after pane B was emptied): seed pane B
+    // from pane A so the user has something to start from. Tab IDs are
+    // regenerated so removing a B tab doesn't accidentally affect A through
+    // any stray references. Once pane B has tabs, V↔H toggles preserve them.
+    if (wasSingle && queueTabsB.length === 0) {
+      queueTabsB = queueTabs.map(t => ({ ...t, id: newTabId(), queueIds: [...t.queueIds] }));
+      const activeIdx = queueTabs.findIndex(t => t.id === activeTabId);
+      activeTabIdB = activeIdx >= 0
+        ? queueTabsB[activeIdx]?.id || queueTabsB[0]?.id || null
+        : queueTabsB[0]?.id || null;
     }
+    if (!queueTabsB.find(t => t.id === activeTabIdB)) activeTabIdB = queueTabsB[0]?.id || null;
   }
   saveQueueTabs();
   refreshDerivedQueueState();
   renderAll();
   applyQueueSplitSavedSize();
   if (splitMode !== "single") {
-    const b = queueTabs.find(t => t.id === activeTabIdB);
+    const b = queueTabsB.find(t => t.id === activeTabIdB);
     if (b) pollAllQueues(b.queueIds).catch(() => {});
   }
   refreshSubscriptions().catch(() => {});
@@ -6541,6 +6559,7 @@ function findWorkspace(list, name) {
 function captureCurrentWorkspace() {
   return {
     queueTabs: JSON.parse(JSON.stringify(queueTabs)),   // deep clone
+    queueTabsB: JSON.parse(JSON.stringify(queueTabsB)),
     activeTabId,
     activeTabIdB,
     splitMode,
@@ -6563,10 +6582,13 @@ async function applyWorkspace(ws) {
     queueTabs = ws.queues.map(qid => ({ id: newTabId(), name: "", queueIds: [qid], divisionId: null }));
     activeTabId = queueTabs[0]?.id || null;
   }
-  // Both panes share queueTabs now; pane B just tracks its own activeTabId.
+  // Pane B has its own independent tab list. Workspaces saved before this
+  // model existed (or before the v50 short-lived shared-tabs change) just
+  // load with empty B; setSplitMode will seed it on first split-on.
+  queueTabsB = Array.isArray(ws.queueTabsB) ? JSON.parse(JSON.stringify(ws.queueTabsB)) : [];
   splitMode = (ws.splitMode === "v" || ws.splitMode === "h") ? ws.splitMode : "single";
   activeTabIdB = ws.activeTabIdB || null;
-  if (!queueTabs.find(t => t.id === activeTabIdB)) activeTabIdB = activeTabId || queueTabs[0]?.id || null;
+  if (!queueTabsB.find(t => t.id === activeTabIdB)) activeTabIdB = queueTabsB[0]?.id || null;
   refreshDerivedQueueState();
   if (ws.myCols) myCols = [...ws.myCols];
   if (ws.queueCols) queueCols = [...ws.queueCols];
