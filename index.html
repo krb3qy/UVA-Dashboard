@@ -1143,13 +1143,11 @@
   <div class="dev-log" id="devLog"></div>
 </div>
 
-<!-- Genesys Cloud WebRTC SDK v8 — required for persistent-connection
-     multiplex (the "Line Appearance" / "Calls Per Line" path). v6
-     doesn't have multiplex code, so a 2nd call delivered onto our
-     existing softphone session never surfaces. v8 fires
-     conversationUpdate for those.
-     NO crossorigin attr — the GC SDK CDN doesn't send CORS headers. -->
-<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v8/genesys-cloud-webrtc-sdk.bundle.min.js"></script>
+<!-- Genesys Cloud WebRTC SDK v6 — proven path for the basic merge.
+     v8 was tried for multiplex support but broke the cold-start
+     2-call merge. Reverting; the 3rd-call-into-conference path is
+     a separate problem we'll revisit. -->
+<script src="https://sdk-cdn.mypurecloud.com/webrtc-sdk/v6/genesys-cloud-webrtc-sdk.bundle.min.js"></script>
 
 <script>
 // ================================================================
