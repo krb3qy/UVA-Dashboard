@@ -5474,24 +5474,24 @@ async function mergeQueueCallsViaSdk(ids) {
     return false;
   };
 
-  // PHASE A: clear out any pending SDK sessions across all selected ids
-  // before firing any new /assigns. GC rejects /assign for any conv
-  // while ANY other conv is pending — so we must drain the pending
-  // queue first. This also catches calls auto-routed to us by GC during
-  // ensureAssignReady's on-queue flip.
+  // PHASE A: drain ANY pending SDK session — selected or not. GC's
+  // routing engine often auto-routes an UNSELECTED queued call to us
+  // when we go on-queue (during ensureAssignReady's presence flip).
+  // That pending session blocks every subsequent /assign with
+  // "User is pending on conversation X". Walk gcSdkSessions itself,
+  // not just the selected ids.
   for (let pass = 0; pass < 2; pass++) {
-    for (const id of ids) {
-      if (gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id)) {
-        dlog.info("merge", "draining pendingSession before assigns", { id });
-        try { await tryAcceptPending(id); } catch (e) { dlog.warn("merge", "drain accept failed", { id, msg: e.message }); }
-        await waitForAccepted(id, 5000);
-      }
+    if (!gcSdkReady) break;
+    const pendingIds = [...gcSdkSessions.entries()]
+      .filter(([cid, s]) => !s.hasMedia)
+      .map(([cid]) => cid);
+    for (const id of pendingIds) {
+      dlog.info("merge", "draining pendingSession before assigns", { id, selected: ids.includes(id) });
+      try { await tryAcceptPending(id); } catch (e) { dlog.warn("merge", "drain accept failed", { id, msg: e.message }); }
+      await waitForAccepted(id, 5000);
     }
-    // After accepting whatever was pending, GC may have queued another
-    // pendingSession (next call gets routed when we accepted the prior).
-    // Brief pause for the next pendingSession event to land, then loop.
     await new Promise(r => setTimeout(r, 500));
-    const stillPending = ids.some(id => gcSdkReady && sdkHasSession(id) && !sdkSessionLive(id));
+    const stillPending = [...gcSdkSessions.values()].some(s => !s.hasMedia);
     if (!stillPending) break;
   }
 
