@@ -1339,7 +1339,9 @@ async function devStreamStop() {
   await devStreamFlush().catch(() => {});
   devStreamHandle = null;
   devStreamBuffer = [];
-  await devStreamIDBClear();
+  // Intentionally keep the IndexedDB handle so the next click /
+  // refresh re-attaches without the file-picker UI. Use the panel's
+  // shift+click on Stream to fully forget (see wireDevPanel).
 }
 
 function devStreamUpdateBtn() {
@@ -1501,11 +1503,19 @@ function wireDevPanel() {
   };
   document.getElementById("devFilter").oninput = renderDevLogFull;
   document.getElementById("devLevelFilter").onchange = renderDevLogFull;
-  document.getElementById("devStreamBtn").onclick = async () => {
+  document.getElementById("devStreamBtn").onclick = async (ev) => {
+    // Shift+click clears the saved handle (forget current file).
+    if (ev.shiftKey) {
+      if (devStreamHandle) await devStreamStop();
+      await devStreamIDBClear();
+      devStreamUpdateBtn();
+      dlog.info("devStream", "forgot saved file (shift+click) — next click will re-pick");
+      return;
+    }
     if (devStreamHandle) {
       await devStreamStop();
       devStreamUpdateBtn();
-      dlog.info("devStream", "streaming stopped");
+      dlog.info("devStream", "streaming paused (handle kept; click again to resume)");
       return;
     }
     // Try to re-acquire a saved handle first (user gesture allows the
@@ -1519,14 +1529,13 @@ function wireDevPanel() {
           if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
           devStreamBuffer.push(`# resumed ${new Date().toISOString()}\n`);
           devStreamUpdateBtn();
-          dlog.info("devStream", "resumed via saved handle");
+          dlog.info("devStream", "resumed via saved handle (no re-pick)");
           return;
         }
       } catch (e) {
         console.warn("[devStream] re-acquire failed", e);
       }
     }
-    // Fall back to fresh picker.
     const ok = await devStreamStart();
     devStreamUpdateBtn();
     if (ok) dlog.info("devStream", "streaming started");
