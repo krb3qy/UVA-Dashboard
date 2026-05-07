@@ -1184,9 +1184,57 @@ function devSavePersist() {
 }
 
 // Live stream state — File System Access API. Gated to DEV_USER_IDS.
+// Handle is persisted in IndexedDB so refresh re-attaches automatically
+// (no re-pick prompt). Permission may need to be re-granted on first
+// post-refresh write — the API handles that with requestPermission.
 let devStreamHandle = null;       // FileSystemFileHandle
 let devStreamBuffer = [];         // pending lines
 let devStreamFlushTimer = null;   // setInterval id
+
+const DEV_STREAM_IDB = "uvad-devstream";
+const DEV_STREAM_KEY = "logHandle";
+
+function devStreamIDBOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DEV_STREAM_IDB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("h");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function devStreamIDBSet(handle) {
+  try {
+    const db = await devStreamIDBOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction("h", "readwrite");
+      tx.objectStore("h").put(handle, DEV_STREAM_KEY);
+      tx.oncomplete = () => { db.close(); res(); };
+      tx.onerror = () => { db.close(); rej(tx.error); };
+    });
+  } catch {}
+}
+async function devStreamIDBGet() {
+  try {
+    const db = await devStreamIDBOpen();
+    return await new Promise((res) => {
+      const tx = db.transaction("h", "readonly");
+      const r = tx.objectStore("h").get(DEV_STREAM_KEY);
+      r.onsuccess = () => { db.close(); res(r.result || null); };
+      r.onerror = () => { db.close(); res(null); };
+    });
+  } catch { return null; }
+}
+async function devStreamIDBClear() {
+  try {
+    const db = await devStreamIDBOpen();
+    await new Promise((res) => {
+      const tx = db.transaction("h", "readwrite");
+      tx.objectStore("h").delete(DEV_STREAM_KEY);
+      tx.oncomplete = () => { db.close(); res(); };
+      tx.onerror = () => { db.close(); res(); };
+    });
+  } catch {}
+}
 
 function dashLog(level, area, msg, data) {
   if (devPaused) return;
@@ -1236,15 +1284,13 @@ async function devStreamFlush() {
   }
 }
 
-async function devStreamStart() {
-  // Hardcoded gate: only Alex's user id can stream (defense in depth on
-  // top of the dev-panel mount gate).
+async function devStreamStart(opts = {}) {
   if (!currentUser?.id || !DEV_USER_IDS.has(currentUser.id)) {
-    alert("Streaming is restricted.");
+    if (!opts.silent) alert("Streaming is restricted.");
     return false;
   }
   if (!window.showSaveFilePicker) {
-    alert("File System Access API not supported in this browser.");
+    if (!opts.silent) alert("File System Access API not supported in this browser.");
     return false;
   }
   try {
@@ -1252,7 +1298,7 @@ async function devStreamStart() {
       suggestedName: "uvad-live.log",
       types: [{ description: "Log file", accept: { "text/plain": [".log", ".txt"] } }]
     });
-    // Truncate any prior content so each session starts clean.
+    await devStreamIDBSet(devStreamHandle);
     const w = await devStreamHandle.createWritable();
     await w.write(`# UVAD live log — ${new Date().toISOString()} — user ${currentUser.id}\n`);
     await w.close();
@@ -1265,12 +1311,35 @@ async function devStreamStart() {
   }
 }
 
-function devStreamStop() {
+// Try to re-attach to a previously-picked file from a prior session.
+// Returns true if streaming resumed automatically.
+async function devStreamResume() {
+  if (!currentUser?.id || !DEV_USER_IDS.has(currentUser.id)) return false;
+  const handle = await devStreamIDBGet();
+  if (!handle) return false;
+  try {
+    // Browser may require user gesture for the prompt; queryPermission
+    // returns "granted" without prompting if previously approved.
+    const perm = await handle.queryPermission?.({ mode: "readwrite" });
+    if (perm !== "granted") return false; // wait for user click to re-grant
+    devStreamHandle = handle;
+    if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
+    // Append a session marker — don't truncate (keep history).
+    devStreamBuffer.push(`# resumed ${new Date().toISOString()}\n`);
+    dlog.info("devStream", "resumed from saved handle");
+    return true;
+  } catch (err) {
+    console.warn("[devStream] resume failed", err);
+    return false;
+  }
+}
+
+async function devStreamStop() {
   if (devStreamFlushTimer) { clearInterval(devStreamFlushTimer); devStreamFlushTimer = null; }
-  // Final flush of any pending lines.
-  devStreamFlush().catch(() => {});
+  await devStreamFlush().catch(() => {});
   devStreamHandle = null;
   devStreamBuffer = [];
+  await devStreamIDBClear();
 }
 
 function devStreamUpdateBtn() {
@@ -1401,6 +1470,11 @@ function mountDevPanel() {
   if (icon) icon.classList.add("active");
   const params = new URLSearchParams(location.search);
   if (params.get("dev") === "1") openDevPanel();
+  // Try to silently resume streaming from a saved file handle. If
+  // queryPermission is "granted" (rare without user gesture but
+  // possible after PWA install / persisted permissions), no UI prompt.
+  // Otherwise the user clicks Stream once and we'll re-acquire.
+  devStreamResume().then(ok => { if (ok) devStreamUpdateBtn(); }).catch(() => {});
 }
 function wireDevPanel() {
   const icon = document.getElementById("devIcon");
@@ -1429,14 +1503,33 @@ function wireDevPanel() {
   document.getElementById("devLevelFilter").onchange = renderDevLogFull;
   document.getElementById("devStreamBtn").onclick = async () => {
     if (devStreamHandle) {
-      devStreamStop();
+      await devStreamStop();
       devStreamUpdateBtn();
       dlog.info("devStream", "streaming stopped");
-    } else {
-      const ok = await devStreamStart();
-      devStreamUpdateBtn();
-      if (ok) dlog.info("devStream", "streaming started");
+      return;
     }
+    // Try to re-acquire a saved handle first (user gesture allows the
+    // permission re-prompt to fire). If granted, no file-picker UI.
+    const saved = await devStreamIDBGet();
+    if (saved) {
+      try {
+        const perm = await saved.requestPermission?.({ mode: "readwrite" });
+        if (perm === "granted") {
+          devStreamHandle = saved;
+          if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
+          devStreamBuffer.push(`# resumed ${new Date().toISOString()}\n`);
+          devStreamUpdateBtn();
+          dlog.info("devStream", "resumed via saved handle");
+          return;
+        }
+      } catch (e) {
+        console.warn("[devStream] re-acquire failed", e);
+      }
+    }
+    // Fall back to fresh picker.
+    const ok = await devStreamStart();
+    devStreamUpdateBtn();
+    if (ok) dlog.info("devStream", "streaming started");
   };
   devStreamUpdateBtn();
   // Alt+D toggle
@@ -5429,27 +5522,46 @@ async function mergeQueueCallsViaSdk(ids) {
       await assignCallToMe(id);
     } catch (e) {
       // GC sometimes refuses /assign with "User is pending on
-      // conversation X". X is another conv we have a pending SDK
-      // session for. Accept that one to clear the pending state, then
-      // retry /assign on this id.
+      // conversation X". Try in order:
+      //   1. If SDK has a pendingSession for X, accept it via SDK.
+      //   2. Else look up X via API, find Alex's alerting leg, PATCH
+      //      state=disconnected to actively decline X (clears the
+      //      pending state server-side).
+      //   3. Retry the original /assign.
       const pendingMatch = /pending on conversation ([0-9a-f-]{36})/i.exec(e.message || "");
       if (pendingMatch) {
         const stuckId = pendingMatch[1];
-        dlog.warn("merge", "/assign rejected — pending on another conv; accepting it then retrying", { id, stuckId });
+        dlog.warn("merge", "/assign rejected — pending on another conv; clearing it then retrying", { id, stuckId });
+        let cleared = false;
         try {
           if (gcSdkReady && sdkHasSession(stuckId) && !sdkSessionLive(stuckId)) {
             await tryAcceptPending(stuckId);
-            await waitForAccepted(stuckId, 8000);
-          } else {
-            // No SDK session for the stuck id — can't unstick locally.
-            // Wait briefly in case the SDK propose arrives soon.
-            await new Promise(r => setTimeout(r, 1500));
-            if (sdkHasSession(stuckId) && !sdkSessionLive(stuckId)) {
-              await tryAcceptPending(stuckId);
-              await waitForAccepted(stuckId, 8000);
+            cleared = await waitForAccepted(stuckId, 8000);
+          }
+          if (!cleared) {
+            // SDK doesn't know about it (no propose received) — go
+            // through REST. Fetch the conversation, find Alex's
+            // alerting/dialing/contacting leg, force-disconnect it.
+            const c = await apiFetch(`/api/v2/conversations/calls/${stuckId}`);
+            const myLeg = (c?.participants || []).filter(p => {
+              const uid = p.userId || p.user?.id;
+              if (uid !== currentUser?.id || p.endTime) return false;
+              const st = (p.state || "").toLowerCase();
+              return st === "alerting" || st === "dialing" || st === "contacting" || st === "offering";
+            }).pop();
+            if (myLeg) {
+              dlog.info("merge", "disconnecting stuck pending participant", { stuckId, partId: myLeg.id, state: myLeg.state });
+              await apiFetch(`/api/v2/conversations/calls/${stuckId}/participants/${myLeg.id}`, {
+                method: "PATCH", body: { state: "disconnected" }
+              });
+              // Brief settle so server-side pending state clears.
+              await new Promise(r => setTimeout(r, 800));
+              cleared = true;
+            } else {
+              dlog.warn("merge", "no stuck-pending participant found via REST", { stuckId });
             }
           }
-          // Retry the original /assign now.
+          if (!cleared) throw new Error(`Could not clear stuck pending on ${stuckId}`);
           dlog.info("merge", "retrying /assign after clearing pending", { id });
           await assignCallToMe(id);
         } catch (e2) {
