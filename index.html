@@ -4282,6 +4282,24 @@ function openTransferModal(row) {
       try {
         await apiFetch(url, { method: "POST", body: { ...baseBody, transferType: "Unattended" } });
         dlog.success("transfer", "Unattended transfer accepted", { convId });
+        // Force-end the agent's local SDK softphone session immediately.
+        // Live log 15:14-15:26 proved that after a successful Unattended
+        // /replace/queue, GC eventually fires sessionEnded but only after a
+        // 10-minute SIP timeout. During those 10 minutes the agent's
+        // softphone is "occupied" from GC routing's perspective, so the
+        // destination queue won't route the (now-back-in-queue) call to
+        // the same agent. PATCH'ing the agent's leg to state:disconnected
+        // forces an early WS notification on the conversation, which the
+        // SDK uses to drop the local session quickly.
+        const legToDrop = myLeg?.id || partId;
+        try {
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${legToDrop}`,
+            { method: "PATCH", body: { state: "disconnected" } });
+          dlog.success("transfer", "Unattended: post-transfer agent leg disconnect ok", { convId, legToDrop });
+        } catch (e2) {
+          // Likely already ended by GC's Unattended flow — non-fatal.
+          dlog.info("transfer", "Unattended: agent leg already ended server-side", { convId, msg: e2?.message });
+        }
       } catch (e1) {
         const msg = e1?.message || "";
         if (/transfer\.acd\.call\.unattended|cannot be transferred unattended/i.test(msg)) {
