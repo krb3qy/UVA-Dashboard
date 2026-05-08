@@ -4252,27 +4252,52 @@ function openTransferModal(row) {
   el("transferGo").onclick = async () => {
     const dest = picker?.getDestination();
     if (!dest) { showBanner({ type: "warn", title: "Pick a destination", autoHideMs: 3000 }); return; }
+    // Use the TYPED transfer endpoints under /conversations/{id}/... (NOT
+    // /conversations/calls/{id}/.../replace which is the call-only generic
+    // path that 400s on ACD-Unattended). The typed endpoints are what GC's
+    // native client uses for blind transfer; they accept transferType:
+    // Unattended on ACD calls, which fully releases the agent so the
+    // destination queue can route normally — including back to the same
+    // agent if they're a member.
+    //   queueId  → /replace/queue   (TransferToQueueRequest)
+    //   userId   → /replace/agent   (TransferToAgentRequest)
+    //   address  → /transfer        (TransferToAddressRequest)
+    // OAuth requires conversation:communication:blindTransfer (already on
+    // our app per the existing /replace working). Verified in CLI source
+    // build/gc/cmd/conversations_participants_replace_queue/...go:31.
+    const url =
+      dest.kind === "queueId" ? `/api/v2/conversations/${convId}/participants/${partId}/replace/queue` :
+      dest.kind === "userId"  ? `/api/v2/conversations/${convId}/participants/${partId}/replace/agent` :
+                                `/api/v2/conversations/${convId}/participants/${partId}/transfer`;
+    const baseBody = { [dest.kind]: dest.value };
+
+    dlog.info("transfer", "transferGo clicked", { convId, partId, dest, url });
     try {
-      // Always Attended. GC blocks Unattended on any ACD-originated call
-      // ("conversations.error.transfer.acd.call.unattended" 400) — and the
-      // detection-via-live-acd-leg trick doesn't work because the ACD leg's
-      // endTime gets set the moment an agent picks up. Sending Attended is
-      // accepted for every call type (unattended is a strict subset of
-      // attended-then-leave).
-      const body = { [dest.kind]: dest.value, transferType: "Attended" };
-      await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`, { method: "POST", body });
-      // Attended keeps the agent connected (held) on the conversation as a
-      // consult; the destination ring/queue doesn't connect the customer
-      // until the agent leaves. PATCH state=disconnected on the agent's
-      // leg to complete the transfer immediately. If GC has already torn
-      // the leg down as part of the transfer, the 400/404 is swallowed.
-      const legToDrop = myLeg?.id || partId;
+      // Try Unattended (default; explicit for clarity). If GC rejects
+      // because this call has the legacy ACD-blind-transfer restriction,
+      // fall back to Attended + immediate agent-leg disconnect on the
+      // call-scoped /replace endpoint — that's the bandaid that worked
+      // before the typed-endpoint discovery and matches what the live
+      // log showed actually completing the transfer server-side.
       try {
-        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${legToDrop}`, {
-          method: "PATCH", body: { state: "disconnected" }
-        });
-      } catch (e) {
-        dlog.warn("transfer", "post-transfer leg disconnect failed (likely already ended)", { msg: e.message });
+        await apiFetch(url, { method: "POST", body: { ...baseBody, transferType: "Unattended" } });
+        dlog.success("transfer", "Unattended transfer accepted", { convId });
+      } catch (e1) {
+        const msg = e1?.message || "";
+        if (/transfer\.acd\.call\.unattended|cannot be transferred unattended/i.test(msg)) {
+          dlog.warn("transfer", "Unattended rejected for ACD; falling back to Attended + leg disconnect", { convId });
+          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`,
+            { method: "POST", body: { ...baseBody, transferType: "Attended" } });
+          const legToDrop = myLeg?.id || partId;
+          try {
+            await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${legToDrop}`,
+              { method: "PATCH", body: { state: "disconnected" } });
+          } catch (e2) {
+            dlog.warn("transfer", "post-Attended leg disconnect failed (likely already ended)", { msg: e2?.message });
+          }
+        } else {
+          throw e1;
+        }
       }
       closeModal("transferModal");
     } catch (e) { showBanner({ type: "error", title: "Transfer failed", message: e.message, autoHideMs: 5000 }); }
