@@ -482,6 +482,7 @@
     <div class="item" data-menu="file">File
       <div class="menu-dropdown">
         <div class="mi" data-cmd="settings">Alert Settings…</div>
+        <div class="mi" data-cmd="reload">Refresh</div>
         <div class="sep"></div>
         <div class="mi" data-cmd="logout">Log Off</div>
       </div>
@@ -499,7 +500,6 @@
         <div class="mi" data-cmd="toggleDirectory"><span class="check" id="checkDir">✓</span>Directory</div>
         <div class="sep"></div>
         <div class="mi" data-cmd="customizeCols">Customize Columns…</div>
-        <div class="mi" data-cmd="reload">Refresh</div>
       </div>
     </div>
     <div class="item" data-menu="workspaces">Workspaces
@@ -894,6 +894,7 @@
         <li>Each tab watches one or more queues. Click <strong>+ Queue</strong> to open Settings and add queues.</li>
         <li>Right-click a tab to <strong>Edit queues</strong>, <strong>Rename</strong>, or <strong>Remove</strong> it.</li>
         <li>Groups (2+ queues in one tab) show a blue bar on the left. Hover for the full member list.</li>
+        <li><strong>Split view</strong>: the toggle on the tab bar switches between single, side-by-side, and stacked layouts. The left/top pane stays in sync with single view; the right/bottom pane has its own independent tab list so you can watch different queues on each side. Drag the divider between the panes to resize.</li>
       </ul>
 
       <h3 style="margin:0 0 6px 0;font-size:13px">My Interactions / Call History</h3>
@@ -905,8 +906,22 @@
       <h3 style="margin:0 0 6px 0;font-size:13px">Queue Panel</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
         <li>Shows every live call in the active tab's queue(s).</li>
+        <li><strong>Single-click</strong> a row to select it. <strong>Ctrl/Shift+click</strong> or <strong>drag</strong> across rows to multi-select for merge.</li>
         <li>Right-click any column header to show/hide columns for that queue.</li>
+        <li><strong>Right-click any cell</strong> to copy that field's value (number, name, conv id, etc.).</li>
+        <li><strong>Resize columns</strong> by dragging the right edge of any column header. Sizes persist across reloads.</li>
         <li>Drag a row onto another row to merge the two calls into a conference.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Action Toolbar</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li><strong>Dialer</strong> — single dial, multi-dial bridge, and contact picker (searches agents and external contacts) in one modal. Saved speed-dial groups for the bridge mode.</li>
+        <li><strong>Pickup / Hold / Mute</strong> — standard call controls.</li>
+        <li><strong>Transfer / Consult</strong> — a single smart-search input for each: type a name, number, or queue. Autocomplete shows matching agents + queues; phone-shaped input shows an external option. Transfer drops you off the call after the destination is dialed; Consult lets you talk first.</li>
+        <li><strong>Disconnect</strong> — hang up the selected call.</li>
+        <li><strong>Join / Listen / Coach</strong> — supervisor-only. Hidden for non-supervisor roles.</li>
+        <li><strong>Merge</strong> — combines 2+ multi-selected queue rows into one conference. Greyed out until you have 2+ rows selected. Capped at 20 participants.</li>
+        <li><strong>Add Party</strong> — adds an external number into your current bridge.</li>
       </ul>
 
       <h3 style="margin:0 0 6px 0;font-size:13px">Workgroup Statistics</h3>
@@ -994,9 +1009,10 @@
         </tbody>
       </table>
 
-      <h3 style="margin:0 0 6px 0;font-size:13px">Conference Dialer</h3>
+      <h3 style="margin:0 0 6px 0;font-size:13px">Dialer</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
-        <li>Toolbar button or <strong>Actions &gt; Conference Dialer</strong>. Add numbers, save a group, click <strong>Bridge All</strong>.</li>
+        <li><strong>Dial</strong> tab: type a phone number, or search an agent / external contact. Click <strong>Dial</strong>.</li>
+        <li><strong>Bridge</strong> tab: enter multiple numbers, optionally save them as a speed-dial group, click <strong>Bridge All</strong> to ring every number into one conference.</li>
         <li>Outbound CID defaults to your personal line; pick a queue to present that queue's number instead.</li>
       </ul>
 
@@ -1009,7 +1025,16 @@
 
       <h3 style="margin:0 0 6px 0;font-size:13px">Workspaces</h3>
       <ul style="margin:0 0 12px 18px;padding:0">
-        <li>Save your current layout (tabs, columns, splitter sizes, sidebar state) via <strong>Workspaces &gt; Manage Workspaces</strong>. Switch layouts from the Workspaces menu.</li>
+        <li>Save your current layout (tabs, columns, splitter sizes, side-panel toggles) via <strong>Workspaces &gt; Manage Workspaces</strong>. Switch layouts from the Workspaces menu.</li>
+        <li><strong>Reset to Default</strong> — clears the active layout to first-run state (no queue tabs, single view, both side panels visible). Saved workspaces are kept.</li>
+      </ul>
+
+      <h3 style="margin:0 0 6px 0;font-size:13px">Menu Bar</h3>
+      <ul style="margin:0 0 12px 18px;padding:0">
+        <li><strong>File</strong>: Alert Settings, Refresh, Log Off.</li>
+        <li><strong>View</strong>: toggle Workgroup Statistics or Directory side panels independently. Customize Columns sets the default column set for each scope.</li>
+        <li><strong>Workspaces</strong>: load / save / reset / manage layouts.</li>
+        <li><strong>Actions</strong>: Dialer, Send Text Message.</li>
       </ul>
 
       <h3 style="margin:0 0 6px 0;font-size:13px">Audio in this tab</h3>
@@ -1556,7 +1581,9 @@ const STORAGE = {
   queues: "gc_uvad_queues",
   colsMy: "gc_uvad_cols_my",
   colsQueue: "gc_uvad_cols_queue",
-  sidebarCollapsed: "gc_uvad_sidebar_collapsed",
+  sidebarCollapsed: "gc_uvad_sidebar_collapsed",   // legacy "whole right column hidden" flag
+  statsHidden: "gc_uvad_stats_hidden",
+  dirHidden: "gc_uvad_dir_hidden",
   statsGroupState: "gc_uvad_stats_group_state",
   confGroups: "gc_uvad_conf_groups",
   confLastFromQueue: "gc_uvad_conf_last_from_queue",
@@ -5126,18 +5153,32 @@ function wireDirectory() {
   }
 }
 
-function toggleRightCol() {
+// Each side panel has its own toggle. The right column auto-collapses
+// when both panels are hidden so we don't show an empty sidebar; it
+// re-expands as soon as either panel comes back. Matches the user's
+// expectation that "Workgroup Statistics" toggles ONLY the stats panel.
+function syncRightColCollapse() {
   const rc = el("rightCol");
-  rc.classList.toggle("collapsed");
-  const hidden = rc.classList.contains("collapsed");
+  const stats = el("statsPanel");
+  const dir = el("dirPanel");
+  const bothHidden = stats.style.display === "none" && dir.style.display === "none";
+  rc.classList.toggle("collapsed", bothHidden);
+}
+function toggleRightCol() {
+  const stats = el("statsPanel");
+  const hidden = stats.style.display !== "none";
+  stats.style.display = hidden ? "none" : "";
   el("checkSidebar").textContent = hidden ? "" : "✓";
-  localStorage.setItem(STORAGE.sidebarCollapsed, hidden ? "1" : "0");
+  localStorage.setItem(STORAGE.statsHidden, hidden ? "1" : "0");
+  syncRightColCollapse();
 }
 function toggleDir() {
   const p = el("dirPanel");
-  const hide = p.style.display !== "none" ? "none" : "";
-  p.style.display = hide;
-  el("checkDir").textContent = hide === "none" ? "" : "✓";
+  const hidden = p.style.display !== "none";
+  p.style.display = hidden ? "none" : "";
+  el("checkDir").textContent = hidden ? "" : "✓";
+  localStorage.setItem(STORAGE.dirHidden, hidden ? "1" : "0");
+  syncRightColCollapse();
 }
 
 // ================================================================
@@ -6588,7 +6629,8 @@ function captureCurrentWorkspace() {
     splitMode,
     myCols: [...myCols],
     queueCols: [...queueCols],
-    sidebarCollapsed: el("rightCol").classList.contains("collapsed"),
+    statsHidden: el("statsPanel").style.display === "none",
+    dirHidden:   el("dirPanel").style.display   === "none",
     myPanelPx: Number(localStorage.getItem("gc_uvad_myPanelPx")) || null,
     rightColPx: Number(localStorage.getItem("gc_uvad_rightColPx")) || null,
     statsGroupState: { ...statsGroupState },
@@ -6615,8 +6657,17 @@ async function applyWorkspace(ws) {
   refreshDerivedQueueState();
   if (ws.myCols) myCols = [...ws.myCols];
   if (ws.queueCols) queueCols = [...ws.queueCols];
-  if (ws.sidebarCollapsed) { el("rightCol").classList.add("collapsed"); el("checkSidebar").textContent = ""; }
-  else { el("rightCol").classList.remove("collapsed"); el("checkSidebar").textContent = "✓"; }
+  // Per-panel toggles. Legacy workspaces persisted a single sidebarCollapsed
+  // flag — treat that as "both panels hidden" for upgrade.
+  const wsStatsHidden = ws.statsHidden ?? ws.sidebarCollapsed ?? false;
+  const wsDirHidden   = ws.dirHidden   ?? ws.sidebarCollapsed ?? false;
+  el("statsPanel").style.display = wsStatsHidden ? "none" : "";
+  el("dirPanel").style.display   = wsDirHidden   ? "none" : "";
+  el("checkSidebar").textContent = wsStatsHidden ? "" : "✓";
+  el("checkDir").textContent     = wsDirHidden   ? "" : "✓";
+  localStorage.setItem(STORAGE.statsHidden, wsStatsHidden ? "1" : "0");
+  localStorage.setItem(STORAGE.dirHidden,   wsDirHidden   ? "1" : "0");
+  syncRightColCollapse();
   if (ws.myPanelPx) { el("myPanel").style.flex = `0 0 ${ws.myPanelPx}px`; localStorage.setItem("gc_uvad_myPanelPx", String(ws.myPanelPx)); }
   if (ws.rightColPx) { el("rightCol").style.flex = `0 0 ${ws.rightColPx}px`; localStorage.setItem("gc_uvad_rightColPx", String(ws.rightColPx)); }
   if (ws.statsGroupState) statsGroupState = { ...ws.statsGroupState };
@@ -6746,13 +6797,16 @@ function renderWorkspacesMenu() {
   if (active && findWorkspace(list, active)) {
     html += `<div class="sep"></div><div class="mi" data-cmd="saveActiveWorkspace">✎ Save changes to "${escape(active)}"</div>`;
   }
-  html += '<div class="sep"></div><div class="mi" data-cmd="manageWorkspaces">Manage Workspaces…</div>';
+  html += '<div class="sep"></div>';
+  html += '<div class="mi" data-cmd="resetDefaultWorkspace">Reset to Default</div>';
+  html += '<div class="mi" data-cmd="manageWorkspaces">Manage Workspaces…</div>';
   menu.innerHTML = html;
   menu.querySelectorAll(".mi[data-cmd]").forEach(mi => mi.onclick = (e) => {
     e.stopPropagation();
     document.querySelectorAll(".menu-bar .item").forEach(x => x.classList.remove("open"));
     if (mi.dataset.cmd === "manageWorkspaces") openWorkspacesModal();
     else if (mi.dataset.cmd === "saveActiveWorkspace") saveActiveWorkspaceChanges();
+    else if (mi.dataset.cmd === "resetDefaultWorkspace") resetWorkspaceToDefault();
     else if (mi.dataset.cmd === "loadWorkspace") {
       const entry = findWorkspace(loadWorkspaces(), mi.dataset.ws);
       if (!entry) return;
@@ -6761,6 +6815,36 @@ function renderWorkspacesMenu() {
       renderWorkspacesMenu();
     }
   });
+}
+
+// "Reset to Default" — clears the dashboard layout to its first-run state:
+// no queue tabs, single (non-split) view, both side panels visible.
+// Saved workspaces are NOT deleted; this only clears the active layout.
+async function resetWorkspaceToDefault() {
+  if (!confirm("Reset the dashboard layout to defaults?\n\n• Removes all queue tabs (no queues watched)\n• Switches to single view (un-splits)\n• Shows Workgroup Statistics + Directory\n\nSaved workspaces are kept.")) return;
+  queueTabs = [];
+  queueTabsB = [];
+  activeTabId = null;
+  activeTabIdB = null;
+  splitMode = "single";
+  // Show both panels
+  el("statsPanel").style.display = "";
+  el("dirPanel").style.display   = "";
+  el("checkSidebar").textContent = "✓";
+  el("checkDir").textContent     = "✓";
+  localStorage.setItem(STORAGE.statsHidden, "0");
+  localStorage.setItem(STORAGE.dirHidden,   "0");
+  localStorage.setItem(STORAGE.sidebarCollapsed, "0");
+  syncRightColCollapse();
+  // Clear active workspace pointer so the menu doesn't keep showing a checkmark
+  localStorage.removeItem(STORAGE.activeWorkspace);
+  saveQueueTabs();
+  refreshDerivedQueueState();
+  renderAll();
+  applyQueueSplitSavedSize();
+  try { await refreshSubscriptions(); } catch {}
+  renderWorkspacesMenu();
+  showBanner({ type: "info", title: "Layout reset", message: "Dashboard restored to defaults.", autoHideMs: 2500 });
 }
 
 // ================================================================
@@ -7440,10 +7524,14 @@ async function init() {
   startClock();
   renderWorkspacesMenu();
 
-  if (localStorage.getItem(STORAGE.sidebarCollapsed) === "1") {
-    el("rightCol").classList.add("collapsed");
-    el("checkSidebar").textContent = "";
-  }
+  // Restore per-panel toggles. Legacy sidebarCollapsed flag still hides
+  // both panels for users upgrading from before per-panel toggles existed.
+  const legacyAllHidden = localStorage.getItem(STORAGE.sidebarCollapsed) === "1";
+  const statsHidden = legacyAllHidden || localStorage.getItem(STORAGE.statsHidden) === "1";
+  const dirHidden   = legacyAllHidden || localStorage.getItem(STORAGE.dirHidden)   === "1";
+  if (statsHidden) { el("statsPanel").style.display = "none"; el("checkSidebar").textContent = ""; }
+  if (dirHidden)   { el("dirPanel").style.display   = "none"; el("checkDir").textContent     = ""; }
+  syncRightColCollapse();
 
   const url = new URL(window.location.href);
   const code = url.searchParams.get("code");
