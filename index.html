@@ -4237,6 +4237,57 @@ function mountSmartDestinationPicker(host) {
   return ctrl;
 }
 
+// Post-transfer SDK reconnect. Live log 15:14-15:26 / 16:09-16:10 proved
+// that after a successful blind transfer (Unattended /replace/queue + agent
+// leg PATCH disconnect), GC's queue routing CAN route the conversation back
+// to the same agent — and we observed the new alerting participant being
+// added (participantCount jumps + v2.users.{id}.conversations.calls notif
+// fires) — but the v6 WebRTC SDK's session manager retains per-conversation
+// state from the original session. The fresh propose for the same conv id
+// is suppressed as a duplicate, so no [gcSdk-evt] pendingSession fires on
+// the dashboard. The SIP BYE that would naturally clear this state takes
+// ~10 minutes. A clean SDK reconnect resets the session manager's per-conv
+// map immediately, allowing fresh pendingSessions to flow.
+//
+// Confirmed independently: at 15:15:16 the SDK auto-reconnected on its own
+// (we logged "[gcSdk-evt] connected reconnect:false") and the next propose
+// fired cleanly. Forcing the reconnect ourselves does the same thing under
+// our control instead of waiting for the SDK to notice.
+function scheduleSdkReconnectAfterTransfer(convId) {
+  // Drop our local cached session so the inline call strip / widgets
+  // don't show a phantom call during the reconnect window.
+  gcSdkSessions.delete(convId);
+  sdkAutoAcceptIds.delete(convId);
+  stopSdkRingtone(convId);
+  try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
+  if (!gcSdkReady) return;
+  setTimeout(() => {
+    dlog.info("transfer", "triggering SDK reconnect to clear stale session state", { convId });
+    try {
+      const reconnectFn = typeof gcSdk?.reconnect === "function" ? gcSdk.reconnect.bind(gcSdk) : null;
+      if (reconnectFn) {
+        Promise.resolve(reconnectFn())
+          .then(() => dlog.success("transfer", "SDK reconnect ok", { convId }))
+          .catch(e => dlog.warn("transfer", "SDK reconnect failed", { convId, msg: e?.message }));
+        return;
+      }
+      // Fallback: disconnect + connect cycle if reconnect() isn't exposed.
+      const dc = typeof gcSdk?.disconnect === "function" ? gcSdk.disconnect.bind(gcSdk) : null;
+      const cn = typeof gcSdk?.connect    === "function" ? gcSdk.connect.bind(gcSdk)    : null;
+      if (dc && cn) {
+        Promise.resolve(dc()).catch(() => {})
+          .then(() => cn())
+          .then(() => dlog.success("transfer", "SDK disconnect+connect cycle ok", { convId }))
+          .catch(e => dlog.warn("transfer", "SDK disconnect+connect failed", { convId, msg: e?.message }));
+      } else {
+        dlog.warn("transfer", "no reconnect API available on SDK", { convId });
+      }
+    } catch (e) {
+      dlog.warn("transfer", "scheduleSdkReconnectAfterTransfer threw", { convId, msg: e?.message });
+    }
+  }, 1500);
+}
+
 function openTransferModal(row) {
   const convId = row.id;
   // The agent's own leg must be the one being replaced — disconnecting it
@@ -4282,24 +4333,15 @@ function openTransferModal(row) {
       try {
         await apiFetch(url, { method: "POST", body: { ...baseBody, transferType: "Unattended" } });
         dlog.success("transfer", "Unattended transfer accepted", { convId });
-        // Force-end the agent's local SDK softphone session immediately.
-        // Live log 15:14-15:26 proved that after a successful Unattended
-        // /replace/queue, GC eventually fires sessionEnded but only after a
-        // 10-minute SIP timeout. During those 10 minutes the agent's
-        // softphone is "occupied" from GC routing's perspective, so the
-        // destination queue won't route the (now-back-in-queue) call to
-        // the same agent. PATCH'ing the agent's leg to state:disconnected
-        // forces an early WS notification on the conversation, which the
-        // SDK uses to drop the local session quickly.
         const legToDrop = myLeg?.id || partId;
         try {
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${legToDrop}`,
             { method: "PATCH", body: { state: "disconnected" } });
           dlog.success("transfer", "Unattended: post-transfer agent leg disconnect ok", { convId, legToDrop });
         } catch (e2) {
-          // Likely already ended by GC's Unattended flow — non-fatal.
           dlog.info("transfer", "Unattended: agent leg already ended server-side", { convId, msg: e2?.message });
         }
+        scheduleSdkReconnectAfterTransfer(convId);
       } catch (e1) {
         const msg = e1?.message || "";
         if (/transfer\.acd\.call\.unattended|cannot be transferred unattended/i.test(msg)) {
@@ -4313,6 +4355,7 @@ function openTransferModal(row) {
           } catch (e2) {
             dlog.warn("transfer", "post-Attended leg disconnect failed (likely already ended)", { msg: e2?.message });
           }
+          scheduleSdkReconnectAfterTransfer(convId);
         } else {
           throw e1;
         }
