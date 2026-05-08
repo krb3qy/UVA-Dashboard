@@ -4212,16 +4212,13 @@ function mountSmartDestinationPicker(host) {
 
 function openTransferModal(row) {
   const convId = row.id;
-  // Alex's own leg must be the one being replaced — that's the agent's
-  // path on the conversation, and disconnecting it after the transfer is
-  // what completes the blind-from-Alex's-perspective behavior.
+  // The agent's own leg must be the one being replaced — disconnecting it
+  // after the transfer completes the blind-from-agent flow (matches what
+  // GC's native UI does when an agent transfers a queue-routed call).
   const myLeg = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime);
   const partId = myLeg?.id
               || (row.raw.participants || []).find(p => (p.purpose === "acd" || p.purpose === "agent") && !p.endTime)?.id;
   if (!partId) return showBanner({ type: "error", title: "Transfer needs an active participant leg", autoHideMs: 4000 });
-  // GC enforces transferType:Attended on ACD-routed calls. Detect by
-  // presence of a live purpose='acd' participant on the conversation.
-  const isAcd = (row.raw.participants || []).some(p => p.purpose === "acd" && !p.endTime);
   openModal("transferModal");
   const picker = mountSmartDestinationPicker(el("transferPicker"));
   picker?.focus();
@@ -4229,30 +4226,26 @@ function openTransferModal(row) {
     const dest = picker?.getDestination();
     if (!dest) { showBanner({ type: "warn", title: "Pick a destination", autoHideMs: 3000 }); return; }
     try {
-      const body = { [dest.kind]: dest.value };
-      if (isAcd) body.transferType = "Attended";
+      // Always Attended. GC blocks Unattended on any ACD-originated call
+      // ("conversations.error.transfer.acd.call.unattended" 400) — and the
+      // detection-via-live-acd-leg trick doesn't work because the ACD leg's
+      // endTime gets set the moment an agent picks up. Sending Attended is
+      // accepted for every call type (unattended is a strict subset of
+      // attended-then-leave).
+      const body = { [dest.kind]: dest.value, transferType: "Attended" };
       await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/replace`, { method: "POST", body });
-      // Attended transfer keeps the agent connected (held) on the call
-      // until they explicitly leave the consult — the customer can't reach
-      // the new destination otherwise. Our Transfer button is blind from
-      // the user's perspective, so once /replace is accepted, immediately
-      // PATCH the agent leg to disconnected. This completes the transfer
-      // and drops the agent out of the call.
-      //
-      // Without this drop, post-transfer on a queue → queue route the
-      // dashboard saw "alerting" in the destination queue but the SDK
-      // never rang because GC won't double-ring an agent who's already
-      // a connected participant on that conversation.
-      if (isAcd && myLeg?.id) {
-        try {
-          await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myLeg.id}`, {
-            method: "PATCH", body: { state: "disconnected" }
-          });
-        } catch (e) {
-          // The leg may have already been ended server-side as part of the
-          // transfer flow — that's fine, we're targeting the same end state.
-          dlog.warn("transfer", "post-transfer leg disconnect failed (likely already ended)", { msg: e.message });
-        }
+      // Attended keeps the agent connected (held) on the conversation as a
+      // consult; the destination ring/queue doesn't connect the customer
+      // until the agent leaves. PATCH state=disconnected on the agent's
+      // leg to complete the transfer immediately. If GC has already torn
+      // the leg down as part of the transfer, the 400/404 is swallowed.
+      const legToDrop = myLeg?.id || partId;
+      try {
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${legToDrop}`, {
+          method: "PATCH", body: { state: "disconnected" }
+        });
+      } catch (e) {
+        dlog.warn("transfer", "post-transfer leg disconnect failed (likely already ended)", { msg: e.message });
       }
       closeModal("transferModal");
     } catch (e) { showBanner({ type: "error", title: "Transfer failed", message: e.message, autoHideMs: 5000 }); }
