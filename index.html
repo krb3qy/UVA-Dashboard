@@ -1191,6 +1191,8 @@ function devSavePersist() {
 let devStreamHandle = null;       // FileSystemFileHandle
 let devStreamBuffer = [];         // pending lines
 let devStreamFlushTimer = null;   // setInterval id
+let devStreamFlushFails = 0;      // consecutive flush failures
+const DEV_STREAM_MAX_FAILS = 3;
 
 const DEV_STREAM_IDB = "uvad-devstream";
 const DEV_STREAM_KEY = "logHandle";
@@ -1278,10 +1280,21 @@ async function devStreamFlush() {
     await writable.seek(file.size);
     await writable.write(lines.join(""));
     await writable.close();
+    devStreamFlushFails = 0;
   } catch (err) {
-    // Push lines back to retry next flush.
     devStreamBuffer.unshift(...lines);
     console.warn("[devStream] flush failed", err);
+    devStreamFlushFails++;
+    // File deleted / handle invalidated mid-session — give up and prompt re-pick.
+    if (devStreamFlushFails >= DEV_STREAM_MAX_FAILS) {
+      if (devStreamFlushTimer) { clearInterval(devStreamFlushTimer); devStreamFlushTimer = null; }
+      devStreamHandle = null;
+      devStreamBuffer = [];
+      devStreamFlushFails = 0;
+      await devStreamIDBClear();
+      devStreamUpdateBtn();
+      showBanner({ type: "warn", title: "Log streaming stopped", message: "Target file is missing or unwritable. Click Stream to pick a new file.", autoHideMs: 8000 });
+    }
   }
 }
 
@@ -1323,6 +1336,16 @@ async function devStreamResume() {
     // returns "granted" without prompting if previously approved.
     const perm = await handle.queryPermission?.({ mode: "readwrite" });
     if (perm !== "granted") return false; // wait for user click to re-grant
+    // Probe the handle — if the file was deleted/moved since last session,
+    // getFile() throws NotFoundError. Clear the stale handle so the next
+    // click opens the picker instead of silently auto-attaching to nothing.
+    try {
+      await handle.getFile();
+    } catch (probeErr) {
+      console.warn("[devStream] saved handle is dead, clearing", probeErr);
+      await devStreamIDBClear();
+      return false;
+    }
     devStreamHandle = handle;
     if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
     // Append a session marker — don't truncate (keep history).
