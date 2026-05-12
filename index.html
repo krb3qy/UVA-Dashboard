@@ -5860,9 +5860,9 @@ async function ensureAssignReady(convId) {
     }
     if (!u?.station?.associatedStation?.id) {
       if (!gcSdkReady) {
-        throw new Error("Your audio tab isn't connected as a station. Refresh the page; if prompted, allow microphone access.");
+        throw new Error("The dashboard couldn't register as your phone. Refresh the page and allow microphone access if asked.");
       }
-      throw new Error("Another Genesys client may be holding your station. Close other GC tabs/clients and refresh this dashboard.");
+      throw new Error("Another Genesys window has your phone registered. Close any other Genesys Cloud tabs or the desktop app, then refresh this page.");
     }
     dlog.success("merge", "self-heal restored associatedStation");
   }
