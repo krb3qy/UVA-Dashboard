@@ -5842,10 +5842,29 @@ async function ensureAssignReady(convId) {
   }
   dlog.info("merge", "user state", { rs: u?.routingStatus?.status, presence: u?.presence?.presenceDefinition?.systemPresence, hasStation: !!u?.station?.associatedStation?.id });
 
-  // 2. Station check.
-  const station = u?.station?.associatedStation || u?.station?.effectiveStation || u?.station?.defaultStation;
-  if (!station?.id) {
-    throw new Error("You don't have an associated station. Pick one in your GC client (Settings ▸ Phone) and try again.");
+  // 2. Station check — /assign requires a LIVE registration (associatedStation),
+  //    not just a configured station (effective/default). If associatedStation
+  //    is missing, the dashboard tab's WebRTC SDK hasn't claimed the station
+  //    server-side. Try one self-heal pass via SDK re-init, then re-check.
+  if (!u?.station?.associatedStation?.id) {
+    dlog.warn("merge", "no associatedStation — attempting self-heal", { sdkReady: gcSdkReady, hasSdk: !!gcSdk });
+    if (gcSdkReady && gcSdk?.initialize) {
+      try {
+        await gcSdk.initialize();
+        await new Promise(r => setTimeout(r, 1500));
+        u = await apiFetch(`/api/v2/users/${currentUser.id}?expand=presence,routingStatus,station`);
+        dlog.info("merge", "post-heal user state", { hasStation: !!u?.station?.associatedStation?.id });
+      } catch (e) {
+        dlog.error("merge", "self-heal SDK re-init failed", { msg: e.message });
+      }
+    }
+    if (!u?.station?.associatedStation?.id) {
+      if (!gcSdkReady) {
+        throw new Error("Your audio tab isn't connected as a station. Refresh the page; if prompted, allow microphone access.");
+      }
+      throw new Error("Another Genesys client may be holding your station. Close other GC tabs/clients and refresh this dashboard.");
+    }
+    dlog.success("merge", "self-heal restored associatedStation");
   }
 
   // 3. Routing-status auto-fix.
