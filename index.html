@@ -4035,6 +4035,37 @@ async function doAction(act, row) {
           let result = await doAssign();
           if (!result.ok) {
             const msg = result.err?.message || "";
+            // Specific server-side failure: GC says we have no live station
+            // registration. Dump full SDK + station snapshot so we can
+            // correlate why the SDK thinks it's ready when the server
+            // disagrees. Don't reformat — keep one structured line.
+            if (/no station association/i.test(msg)) {
+              let meSnapshot = null;
+              try { meSnapshot = await apiFetch(`/api/v2/users/${currentUser.id}?expand=station`); } catch {}
+              let audioInputs = -1;
+              try {
+                if (navigator.mediaDevices?.enumerateDevices) {
+                  const devs = await navigator.mediaDevices.enumerateDevices();
+                  audioInputs = devs.filter(d => d.kind === "audioinput").length;
+                }
+              } catch {}
+              dlog.error("assign-fail-context", "assign 400 'no station association' — diagnostic snapshot", {
+                convId,
+                gcSdkReady,
+                gcSdkExists: !!gcSdk,
+                gcSdkError,
+                sdkStation: (() => { try { return gcSdk?.station || null; } catch { return "[unreadable]"; } })(),
+                sdkConnected: (() => { try { return gcSdk?.connected ?? gcSdk?.isConnected ?? null; } catch { return null; } })(),
+                sdkConcurrent: (() => { try { return gcSdk?.isConcurrentSoftphoneSessionsEnabled?.(); } catch { return null; } })(),
+                sdkPersistent: (() => { try { return gcSdk?.isPersistentConnectionEnabled?.(); } catch { return null; } })(),
+                activeSessionCount: gcSdkSessions?.size ?? null,
+                audioInputs,
+                meAssociatedStation: meSnapshot?.station?.associatedStation || null,
+                meEffectiveStation: meSnapshot?.station?.effectiveStation || null,
+                meDefaultStation: meSnapshot?.station?.defaultStation || null,
+                meLastAssociatedStation: meSnapshot?.station?.lastAssociatedStation || null
+              });
+            }
             // Already assigned to us → success path. Accept SDK session if present.
             if (/already assigned to agent/i.test(msg)) {
               dlog.info("doAction", "pickup: /assign 'already assigned' — treating as success", { convId });
@@ -7300,14 +7331,45 @@ async function initWebrtcSdk() {
 
   // Mic permission probe so we know up-front whether autoplay-with-audio
   // and getUserMedia will succeed once a pendingSession fires.
+  let micPermState = "unknown";
   try {
     if (navigator.permissions?.query) {
       const p = await navigator.permissions.query({ name: "microphone" });
+      micPermState = p.state;
       dlog.info("gcSdk", "mic permission", { state: p.state });
     } else {
       dlog.warn("gcSdk", "navigator.permissions.query unavailable");
     }
   } catch (e) { dlog.warn("gcSdk", "mic perm probe failed", { msg: e.message }); }
+
+  // Audio input device probe. Permission "granted" does NOT mean a device
+  // exists — a PC with no mic hardware (or a disconnected USB headset)
+  // still reports granted. Zero audioinput devices = getUserMedia will
+  // throw NotFoundError later when a session is accepted, and the station
+  // will never register server-side. Surface it now.
+  let audioInputCount = -1;
+  try {
+    if (navigator.mediaDevices?.enumerateDevices) {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devs.filter(d => d.kind === "audioinput");
+      audioInputCount = inputs.length;
+      dlog.info("gcSdk", "audio input devices", {
+        count: inputs.length,
+        // labels are blank string until permission is granted; deviceId is
+        // still useful to confirm hardware is enumerated.
+        devices: inputs.map(d => ({ id: d.deviceId ? d.deviceId.slice(0, 12) : "", label: d.label || "(label hidden — no perm)" }))
+      });
+      if (inputs.length === 0) {
+        dlog.error("gcSdk", "no audio input devices found — station registration will fail");
+        showBanner({
+          type: "error",
+          title: "No microphone detected",
+          message: "Windows reports no microphone. Plug one in (or enable one in Sound settings), then refresh this page.",
+          autoHideMs: 0
+        });
+      }
+    }
+  } catch (e) { dlog.warn("gcSdk", "enumerateDevices failed", { msg: e.message }); }
 
   // Skip ONLY if we can confirm the station is a deskphone or remote phone.
   // If stationType is empty (common when no client is currently registered),
@@ -7362,6 +7424,32 @@ async function initWebrtcSdk() {
       const sdkKeys = Object.keys(gcSdk).filter(k => !k.startsWith("_")).slice(0, 30);
       dlog.info("gcSdk", "capabilities", { concurrent, persistent, station, sdkKeys });
     } catch (e) { dlog.warn("gcSdk", "capability probe failed", { msg: e.message }); }
+
+    // Post-init station verify. initialize() resolving "success" does NOT
+    // guarantee the station got claimed server-side — GC's WebRTC station
+    // registration is async. Wait briefly, re-fetch /users/me, and confirm
+    // associatedStation actually populated. If not, surface immediately at
+    // boot so the user knows BEFORE clicking pickup.
+    try {
+      await new Promise(r => setTimeout(r, 1500));
+      const me2 = await apiFetch(`/api/v2/users/${currentUser.id}?expand=station`);
+      const hasAssoc = !!me2?.station?.associatedStation?.id;
+      dlog.info("gcSdk", "post-init station verify", {
+        hasAssociatedStation: hasAssoc,
+        associatedStation: me2?.station?.associatedStation || null,
+        effectiveStation: me2?.station?.effectiveStation || null,
+        defaultStation: me2?.station?.defaultStation || null
+      });
+      if (!hasAssoc) {
+        dlog.error("gcSdk", "SDK initialized but station did NOT register server-side", { micPermState, audioInputCount });
+        showBanner({
+          type: "error",
+          title: "Phone didn't register",
+          message: "The dashboard came up but Genesys didn't register it as your phone. Close any other Genesys tabs/apps, then refresh. If it still fails, check that a microphone is selected in Windows Sound settings.",
+          autoHideMs: 0
+        });
+      }
+    } catch (e) { dlog.warn("gcSdk", "post-init station verify failed", { msg: e.message }); }
   } catch (e) {
     gcSdkError = e?.message || String(e);
     gcSdk = null;
