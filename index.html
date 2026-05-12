@@ -2137,6 +2137,22 @@ function handleNotification(msg) {
       ingestConversation(body, hintQid);
       reconcileSdkSessionFromConv(body);
       renderAll();
+      // Watchdog: when the server tells US (v2.users.{me}.conversations.calls)
+      // that we're alerting on a call, our WebRTC SDK should deliver a
+      // pendingSession within a few seconds. If it doesn't, we have a
+      // server-vs-client divergence — exactly Jodie's failure mode. Fire
+      // a structured warning with full SDK state for correlation.
+      try {
+        const meTopic = topic === `v2.users.${currentUser?.id}.conversations.calls`;
+        if (meTopic && currentUser?.id) {
+          const myAlertingPart = (body.participants || []).find(p =>
+            (p.userId === currentUser.id || p.user?.id === currentUser.id) &&
+            (p.state === "alerting" || p.state === "contacting") &&
+            !p.endTime
+          );
+          if (myAlertingPart) watchPendingSessionArrival(body.id, myAlertingPart.state);
+        }
+      } catch (wdErr) { dlog.warn("watchdog", "trigger failed", { msg: wdErr.message }); }
     }
   } else if (topic.endsWith(".observations")) {
     const qid = topic.split(".")[3];
@@ -4070,20 +4086,13 @@ async function doAction(act, row) {
               } catch {}
               dlog.error("assign-fail-context", "assign 400 'no station association' — diagnostic snapshot", {
                 convId,
-                gcSdkReady,
-                gcSdkExists: !!gcSdk,
-                gcSdkError,
-                sdkStation: (() => { try { return gcSdk?.station || null; } catch { return "[unreadable]"; } })(),
-                sdkConnected: (() => { try { return gcSdk?.connected ?? gcSdk?.isConnected ?? null; } catch { return null; } })(),
-                sdkConcurrent: (() => { try { return gcSdk?.isConcurrentSoftphoneSessionsEnabled?.(); } catch { return null; } })(),
-                sdkPersistent: (() => { try { return gcSdk?.isPersistentConnectionEnabled?.(); } catch { return null; } })(),
-                activeSessionCount: gcSdkSessions?.size ?? null,
                 audioInputs,
                 meAssociatedStation: meSnapshot?.station?.associatedStation || null,
                 meEffectiveStation: meSnapshot?.station?.effectiveStation || null,
                 meDefaultStation: meSnapshot?.station?.defaultStation || null,
                 meLastAssociatedStation: meSnapshot?.station?.lastAssociatedStation || null
               });
+              dumpSdkState("assign-fail", { convId, errMsg: msg });
             }
             // Already assigned to us → success path. Accept SDK session if present.
             if (/already assigned to agent/i.test(msg)) {
@@ -7332,6 +7341,85 @@ function openStatusNoteEditor() {
   el("sbNote").textContent = statusNoteText ? `Note: ${statusNoteText}` : "Note: —";
 }
 
+// Watchdog: detects "server says I'm alerting on a call but SDK never
+// delivered a pendingSession" — the precise divergence behind Jodie's
+// 5-rings-no-audio case. Each (conv, state) pair fires at most once.
+const _watchdogFired = new Set();
+function watchPendingSessionArrival(convId, alertingState) {
+  const key = `${convId}|${alertingState}`;
+  if (_watchdogFired.has(key)) return;
+  _watchdogFired.add(key);
+  const startedAt = Date.now();
+  dlog.info("watchdog", "alerting-without-session armed", { convId, state: alertingState });
+  setTimeout(() => {
+    const sess = gcSdkSessions?.get(convId);
+    const hasSdkSession = !!sess && (sess.pending || sess.hasMedia || sess.sessionId);
+    if (hasSdkSession) {
+      dlog.success("watchdog", "pendingSession arrived in time", { convId, ms: Date.now() - startedAt });
+      return;
+    }
+    dlog.error("watchdog", "SERVER ALERTED US BUT SDK NEVER DELIVERED pendingSession", { convId, alertingState, waitedMs: Date.now() - startedAt });
+    dumpSdkState("watchdog-no-session", { convId, alertingState });
+  }, 5000);
+}
+
+// Deep SDK state snapshot — fires at boot, periodically as a heartbeat,
+// at every pendingSession event, at /assign failures, and from the
+// participant-without-session watchdog. The goal is: any time we suspect
+// a divergence between what the SDK thinks and what the server sees, we
+// can correlate this snapshot against server-side analytics.
+function dumpSdkState(label, extra) {
+  const safe = (fn) => { try { return fn(); } catch (e) { return `[err:${e.message}]`; } };
+  const tok = (() => { try { const t = getToken() || ""; return t ? `…${t.slice(-6)}` : null; } catch { return null; } })();
+  const snap = {
+    label,
+    t: new Date().toISOString(),
+    gcSdkReady,
+    gcSdkExists: !!gcSdk,
+    gcSdkError,
+    tokenTail: tok,
+    sdk: gcSdk ? {
+      connected: safe(() => gcSdk.connected),
+      isConnected: safe(() => typeof gcSdk.isConnected === "function" ? gcSdk.isConnected() : null),
+      station: safe(() => gcSdk.station),
+      stationActive: safe(() => gcSdk.stationActive),
+      concurrent: safe(() => gcSdk.isConcurrentSoftphoneSessionsEnabled?.()),
+      persistent: safe(() => gcSdk.isPersistentConnectionEnabled?.()),
+      eventNames: safe(() => typeof gcSdk.eventNames === "function" ? gcSdk.eventNames() : null),
+      streamingConnected: safe(() => gcSdk._streamingConnection?.connected ?? gcSdk.streamingConnection?.connected ?? null),
+      streamingState: safe(() => gcSdk._streamingConnection?.state ?? gcSdk.streamingConnection?.state ?? null),
+      sessionMgrSessions: safe(() => {
+        const sm = gcSdk.sessionManager || gcSdk._sessionManager;
+        if (!sm) return null;
+        const sess = sm.sessions || sm._sessions;
+        if (!sess) return null;
+        return Array.isArray(sess) ? sess.length : Object.keys(sess).length;
+      }),
+      pendingSessions: safe(() => {
+        const sm = gcSdk.sessionManager || gcSdk._sessionManager;
+        const ps = sm?.pendingSessions || sm?._pendingSessions;
+        return ps ? Object.keys(ps) : null;
+      })
+    } : null,
+    ourSessions: {
+      count: gcSdkSessions?.size ?? 0,
+      ids: gcSdkSessions ? Array.from(gcSdkSessions.keys()) : []
+    },
+    extra: extra || null
+  };
+  dlog.info("sdk-state", label, snap);
+  return snap;
+}
+
+// Set up a 30s heartbeat once the SDK is ready, so the log always has a
+// recent "what does the SDK think" datapoint to correlate against any
+// server-side trace.
+let sdkHeartbeatTimer = null;
+function startSdkHeartbeat() {
+  if (sdkHeartbeatTimer) return;
+  sdkHeartbeatTimer = setInterval(() => dumpSdkState("heartbeat"), 30000);
+}
+
 // ================================================================
 //  Genesys Cloud WebRTC SDK — bring audio into THIS tab
 // ================================================================
@@ -7468,6 +7556,8 @@ async function initWebrtcSdk() {
           autoHideMs: 0
         });
       }
+      dumpSdkState("post-init", { hasAssociatedStation: hasAssoc, micPermState, audioInputCount });
+      startSdkHeartbeat();
     } catch (e) { dlog.warn("gcSdk", "post-init station verify failed", { msg: e.message }); }
   } catch (e) {
     gcSdkError = e?.message || String(e);
@@ -7483,6 +7573,11 @@ function wireSdkEvents() {
     return;
   }
   gcSdk.on("pendingSession", (s) => {
+    // ENTRY log first — fires before any logic, so if the handler errors
+    // partway we still know it was invoked. This is the proof point for
+    // distinguishing "SDK never delivered the propose" from "handler had
+    // a bug" in stale-SDK investigations.
+    try { dlog.info("gcSdk-evt", "pendingSession ENTRY", { argType: typeof s, argKeys: s && typeof s === "object" ? Object.keys(s).slice(0, 25) : null }); } catch {}
     // SDK v6 emits the propose object directly. Real session-id field is
     // `id` (per pendingSessions[propose.id] in the SDK source). sessionId
     // may also be present. Capture everything so we know what to pass to
@@ -7490,6 +7585,7 @@ function wireSdkEvents() {
     const sid = s?.id || s?.sessionId || s?.sid;
     const allKeys = s && typeof s === "object" ? Object.keys(s).slice(0, 20) : [];
     dlog.success("gcSdk-evt", "pendingSession", { conversationId: s?.conversationId, sessionId: sid, autoAnswer: s?.autoAnswer, fromUserId: s?.fromUserId, fromJid: s?.fromJid, keys: allKeys });
+    try { dumpSdkState("pendingSession-arrived", { cid: s?.conversationId, sid }); } catch {}
     const cid = s?.conversationId; if (!cid) return;
     const cur = gcSdkSessions.get(cid) || {};
     gcSdkSessions.set(cid, { ...cur, sessionId: sid, pending: true, autoAnswer: !!s.autoAnswer, firstSeenAt: Date.now() });
