@@ -1313,8 +1313,17 @@ async function devStreamStart(opts = {}) {
       types: [{ description: "Log file", accept: { "text/plain": [".log", ".txt"] } }]
     });
     await devStreamIDBSet(devStreamHandle);
+    // Backfill the in-memory devLog so boot-time entries (gcSdk init,
+    // audio device probe, post-init station verify) make it into the
+    // file even though streaming was enabled late in the session.
+    const backfill = devLog.map(e => `${fmtTs(e.t)} [${e.level}] [${e.area}] ${e.msg}${e.data ? " " + e.data : ""}\n`).join("");
     const w = await devStreamHandle.createWritable();
     await w.write(`# UVAD live log — ${new Date().toISOString()} — user ${currentUser.id}\n`);
+    if (backfill) {
+      await w.write(`# backfill: ${devLog.length} in-memory entries\n`);
+      await w.write(backfill);
+      await w.write(`# end-backfill\n`);
+    }
     await w.close();
     if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
     return true;
@@ -1348,8 +1357,18 @@ async function devStreamResume() {
     }
     devStreamHandle = handle;
     if (!devStreamFlushTimer) devStreamFlushTimer = setInterval(devStreamFlush, 1000);
-    // Append a session marker — don't truncate (keep history).
+    // Append a session marker + backfill the in-memory devLog. Resume
+    // happens late in boot (after fetchCurrentUser + initWebrtcSdk), so
+    // without backfill all the diagnostic init lines are missing from
+    // the file.
     devStreamBuffer.push(`# resumed ${new Date().toISOString()}\n`);
+    if (devLog.length) {
+      devStreamBuffer.push(`# backfill: ${devLog.length} in-memory entries\n`);
+      for (const e of devLog) {
+        devStreamBuffer.push(`${fmtTs(e.t)} [${e.level}] [${e.area}] ${e.msg}${e.data ? " " + e.data : ""}\n`);
+      }
+      devStreamBuffer.push(`# end-backfill\n`);
+    }
     dlog.info("devStream", "resumed from saved handle");
     return true;
   } catch (err) {
