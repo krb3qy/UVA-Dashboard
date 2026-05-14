@@ -7513,7 +7513,7 @@ async function initWebrtcSdk() {
       environment: CONFIG.environment,
       autoConnectSessions: true,
       defaults: { audioElement: el("gcSdkAudio") },
-      logLevel: "info"
+      logLevel: "debug"
     });
     dlog.info("gcSdk", "constructor ok, wiring events");
     // Tee the WebRTC SDK's own logger into the dev log. v6.1.7 does NOT emit
