@@ -3889,7 +3889,7 @@ async function doAction(act, row) {
           const sid = sess?.sessionId;
           const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
           if (accept && sid) {
-            await accept(sid);
+            await accept({ conversationId: convId });
             stopSdkRingtone(convId);
             // Seed the conversation into our Map so My Interactions
             // displays it immediately — WS update with our connected
@@ -3947,7 +3947,7 @@ async function doAction(act, row) {
         if (gcSdkReady && sid && typeof gcSdk.setAudioMute === "function") {
           const cur = sdkSessionMuted(convId);
           dlog.info("doAction", "setAudioMute", { sid, mute: !cur });
-          await gcSdk.setAudioMute({ sessionId: sid, mute: !cur });
+          await gcSdk.setAudioMute({ conversationId: convId, mute: !cur });
           if (sessRec) sessRec.mute = !cur;
           renderInlineCallStrip();
         } else {
@@ -3964,11 +3964,11 @@ async function doAction(act, row) {
         const sess = sdkGetSession(convId);
         if (gcSdkReady && sess) {
           try {
-            // v6 endSession takes the session object; or the session itself
-            // exposes .end(reason). Try sessionManager.endSession first
-            // (preferred public path), fall back to session.end.
-            if (gcSdk.sessionManager?.endSession) {
-              await gcSdk.sessionManager.endSession(sess, "success");
+            // v11 endSession is gcSdk.endSession({ conversationId, reason }) —
+            // keyed by conversationId, NOT the session object (that was v6).
+            // Fall back to session.end if the top-level method is missing.
+            if (typeof gcSdk.endSession === "function") {
+              await gcSdk.endSession({ conversationId: convId, reason: "success" });
             } else if (typeof sess.end === "function") {
               await sess.end("success");
             } else {
@@ -4023,7 +4023,7 @@ async function doAction(act, row) {
             if (!sid) return false;
             const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.acceptSession?.bind(gcSdk);
             if (!accept) return false;
-            await accept(sid);
+            await accept({ conversationId: cid });
             stopSdkRingtone(cid);
             seedConvWithRetry(cid, 3, 700);
             return true;
@@ -6148,7 +6148,7 @@ async function mergeQueueCallsViaSdk(ids) {
     if (!sid) return false;
     const accept = gcSdk.acceptPendingSession?.bind(gcSdk);
     if (!accept) return false;
-    await accept(sid);
+    await accept({ conversationId: id });
     stopSdkRingtone(id);
     sdkAutoAcceptIds.delete(id);
     seedConvWithRetry(id, 3, 700);
@@ -7623,14 +7623,14 @@ function wireSdkEvents() {
     if (sdkAutoAcceptIds.has(cid)) {
       sdkAutoAcceptIds.delete(cid);
       try {
-        // SDK v6 acceptPendingSession takes a STRING sessionId, not an
-        // object. Internally proceedWithSession(t) does pendingSessions[t]
-        // — passing an object coerces to "[object Object]" and fails to
-        // match. audioElement is already wired via the SDK's defaults.
+        // SDK v11 acceptPendingSession takes { conversationId } (per the v11
+        // docs — "Accept a pending session by conversation ID"). v6 took a
+        // bare sessionId string; passing that to v11 throws "Could not find
+        // a pendingSession matching accept params".
         const accept = gcSdk.acceptPendingSession?.bind(gcSdk) || gcSdk.sessionManager?.acceptPendingSession?.bind(gcSdk.sessionManager);
         if (accept && sid) {
           dlog.info("gcSdk", "auto-accepting pendingSession (user-initiated pickup)", { cid, sid });
-          Promise.resolve(accept(sid)).catch(e =>
+          Promise.resolve(accept({ conversationId: cid })).catch(e =>
             dlog.error("gcSdk", "acceptPendingSession failed", { cid, sid, msg: e.message }));
         } else {
           dlog.warn("gcSdk", "no acceptPendingSession method or no sessionId", { cid, sid, hasAccept: !!accept });
@@ -7709,7 +7709,8 @@ function wireSdkEvents() {
     dlog.info("gcSdk-evt", "handledPendingSession", { conversationId: cid });
   });
   gcSdk.on("station", (info) => {
-    dlog.info("gcSdk-evt", "station", { id: info?.id, name: info?.name, type: info?.type, status: info?.status });
+    // v11 station event payload: { action: 'Associated'|'Disassociated', station: IStation|null }
+    dlog.info("gcSdk-evt", "station", { action: info?.action, id: info?.station?.id, name: info?.station?.name, type: info?.station?.type });
     try { renderMyPresence(); } catch {}
   });
   // v8 only: conversationUpdate fires when GC multiplexes a new call
