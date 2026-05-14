@@ -7398,7 +7398,16 @@ function dumpSdkState(label, extra) {
       pendingSessions: safe(() => {
         const sm = gcSdk.sessionManager || gcSdk._sessionManager;
         const ps = sm?.pendingSessions || sm?._pendingSessions;
-        return ps ? Object.keys(ps) : null;
+        if (!ps) return null;
+        // Dump each entry's conversationId, not just the session-id key —
+        // that one field shows instantly whether a stuck pendingSession
+        // belongs to a PREVIOUS call (the second-call bug signature).
+        const out = {};
+        for (const k of Object.keys(ps)) {
+          const v = ps[k] || {};
+          out[k] = { conversationId: v.conversationId, sessionType: v.sessionType, autoAnswer: v.autoAnswer };
+        }
+        return out;
       })
     } : null,
     ourSessions: {
@@ -7507,6 +7516,26 @@ async function initWebrtcSdk() {
       logLevel: "info"
     });
     dlog.info("gcSdk", "constructor ok, wiring events");
+    // Tee the WebRTC SDK's own logger into the dev log. v6.1.7 does NOT emit
+    // a 'trace' event (verified against source), so gcSdk.on("trace") never
+    // fires — the SDK's internal logs (e.g. "duplicate session invitation,
+    // ignoring", logged at info level WITH the conversationId) were lost.
+    try {
+      if (gcSdk.logger) {
+        for (const lvl of ["log", "debug", "info", "warn", "error"]) {
+          if (typeof gcSdk.logger[lvl] !== "function") continue;
+          const orig = gcSdk.logger[lvl].bind(gcSdk.logger);
+          gcSdk.logger[lvl] = (...args) => {
+            try {
+              const extra = args.length > 1 ? args.slice(1) : undefined;
+              dlog[lvl === "log" ? "debug" : lvl]("gcSdk-log", String(args[0]), extra && extra.length ? extra : undefined);
+            } catch {}
+            return orig(...args);
+          };
+        }
+        dlog.info("gcSdk", "logger tee installed");
+      }
+    } catch (e) { dlog.warn("gcSdk", "logger tee failed", { msg: e?.message }); }
     wireSdkEvents();
     dlog.info("gcSdk", "calling sdk.initialize()");
     await gcSdk.initialize();
@@ -7628,6 +7657,20 @@ function wireSdkEvents() {
   gcSdk.on("sessionEnded", (sess, reason) => {
     dlog.info("gcSdk-evt", "sessionEnded", { conversationId: sess?.conversationId, sessionId: sess?.id, reason: reason?.condition || reason });
     const cid = sess?.conversationId;
+    // Second-call fix: v6.1.7 doesn't evict the pendingSessions entry when a
+    // call ends. GC reuses the session id across calls on a persistent
+    // connection, so the next call's propose hits the SDK's duplicate-id
+    // guard in onPropose and is silently dropped — no pendingSession event,
+    // the call never rings, and pickup 400s "already assigned". Evict it.
+    try {
+      const sid = sess?.id || sess?.sessionId || gcSdkSessions.get(cid)?.sessionId;
+      const sm = gcSdk.sessionManager || gcSdk._sessionManager;
+      if (sid && sm) {
+        if (typeof sm.removePendingSession === "function") sm.removePendingSession(sid);
+        else if (sm.pendingSessions) delete sm.pendingSessions[sid];
+        dlog.info("gcSdk", "evicted stale pendingSession on sessionEnded", { cid, sid });
+      }
+    } catch (e) { dlog.warn("gcSdk", "pendingSession evict failed", { cid, msg: e?.message }); }
     if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); stopSdkRingtone(cid); }
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
