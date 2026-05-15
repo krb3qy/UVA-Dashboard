@@ -1675,6 +1675,12 @@ const sdkAutoAcceptIds = new Set();
 // Per-conversation guard: prevents pickup from firing concurrent /assigns
 // when the user clicks the toolbar button or alert pickup multiple times.
 const pickupInFlight = new Set();
+// Active consult-transfer state per conversation. Populated when the user
+// initiates a consult (POST /consult returns destinationParticipantId) so
+// the call strip can render the Complete / Cancel / All buttons inline.
+// Cleared when the consult ends (cancel, complete, or session teardown).
+// convId → { destinationPartId: string, mode: "DESTINATION" | "BOTH" }
+const consultState = new Map();
 // Active SDK ringtone state — keyed by convId. We synthesize a phone-ring
 // pattern via Web Audio API so we don't need an audio file. Only rings
 // if no alert banner is currently firing for the same conv (otherwise
@@ -2384,8 +2390,10 @@ function ingestConversation(c, hintQueueId) {
   // call is over from the user's perspective regardless of whether other
   // legs have been marked disconnected/endTime'd yet. Force-delete so the
   // queue view never displays "Terminated".
-  if (row.disconnected || stateKey === "terminated") conversations.delete(row.id);
-  else conversations.set(row.id, row);
+  if (row.disconnected || stateKey === "terminated") {
+    conversations.delete(row.id);
+    consultState.delete(row.id);
+  } else conversations.set(row.id, row);
   maybeFireEmergencyAlert(row);
   checkEmergencyAlertStillActive();
 
@@ -3670,6 +3678,15 @@ function renderInlineCallStrip() {
         : `<span class="cs-media-other" title="Audio not in this tab">○</span>`;
     const isAlerting = r.stateKey === "alerting" || audioPending;
     const muted = sdkSessionMuted(cid);
+    // Active consult on this conv → render All / Complete / Cancel inline
+    // alongside Hold/Mute. Mirrors GC native UI: All toggles 3-way,
+    // Complete drops me (transfer done), Cancel drops the destination.
+    const cs = consultState.get(cid);
+    const consultButtons = (cs && !isAlerting)
+      ? `<button data-cs-act="consultAll" data-cid="${escape(cid)}" title="${cs.mode === "BOTH" ? "Drop customer back to hold" : "Bring customer in (3-way)"}">${cs.mode === "BOTH" ? "Talk to dest" : "All"}</button>
+         <button data-cs-act="consultComplete" data-cid="${escape(cid)}" title="Complete transfer (you drop, customer ↔ destination remain)">Complete</button>
+         <button data-cs-act="consultCancel" data-cid="${escape(cid)}" title="Drop destination, return to customer">Cancel</button>`
+      : "";
     const buttons = isAlerting
       ? `<button data-cs-act="answer" data-cid="${escape(cid)}">Answer</button>`
       : `<button data-cs-act="hold" data-cid="${escape(cid)}">${isHeld ? "Unhold" : "Hold"}</button>
@@ -3678,6 +3695,7 @@ function renderInlineCallStrip() {
       ${mediaIcon}
       <span class="cs-name" title="${name}">${name}</span>
       ${buttons}
+      ${consultButtons}
       <button class="danger" data-cs-act="disconnect" data-cid="${escape(cid)}">End</button>
     </span>`;
   }).join("");
@@ -4030,6 +4048,50 @@ async function doAction(act, row) {
           if (!myPartId) throw new Error("No participant to disconnect on");
           await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}`, { method: "PATCH", body: { state: "disconnected" } });
         }
+        break;
+      }
+      case "consultAll": {
+        // PATCH /consult speakTo enum toggles who can hear whom. BOTH
+        // bridges all three parties (3-way / GC's "All" button). Toggling
+        // back to DESTINATION drops the customer out again so you can
+        // resume a private chat with the destination.
+        const cs = consultState.get(convId);
+        if (!cs) { showBanner({ type: "warn", title: "No active consult", autoHideMs: 3000 }); break; }
+        const next = cs.mode === "BOTH" ? "DESTINATION" : "BOTH";
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${myPartId}/consult`, {
+          method: "PATCH",
+          body: { speakTo: next }
+        });
+        cs.mode = next;
+        consultState.set(convId, cs);
+        dlog.info("consult", "speakTo toggled", { convId, mode: next });
+        try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
+        break;
+      }
+      case "consultComplete": {
+        // "Complete" = drop my leg; customer ↔ destination remain. This is
+        // the same wire call as a normal End (PATCH myPart state:disconnected
+        // / SDK endSession), just relabeled in the UI for the consult flow.
+        // Server tears down my participant and leaves the others bridged.
+        consultState.delete(convId);
+        await doAction("disconnect", row);
+        try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
+        break;
+      }
+      case "consultCancel": {
+        // "Cancel" = drop the destination leg only. PATCHes the destination
+        // participant to state:disconnected, leaving me and the customer
+        // connected. GC auto-resumes the customer off hold when the dest
+        // leg drops.
+        const cs = consultState.get(convId);
+        if (!cs?.destinationPartId) { showBanner({ type: "warn", title: "No active consult", autoHideMs: 3000 }); break; }
+        await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${cs.destinationPartId}`, {
+          method: "PATCH",
+          body: { state: "disconnected" }
+        });
+        consultState.delete(convId);
+        dlog.info("consult", "destination dropped", { convId, destPartId: cs.destinationPartId });
+        try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
         break;
       }
       case "pickup": {
@@ -4444,7 +4506,9 @@ function openTransferModal(row) {
   };
 }
 
-// Consult transfer
+// Consult transfer — mirrors GC native UI: customer auto-held, agent
+// speaks privately to destination. After the POST returns, the call
+// strip gains All / Complete / Cancel buttons via consultState entry.
 function openConsultModal(row) {
   const convId = row.id;
   const partId = (row.raw.participants || []).find(p => p.userId === currentUser?.id && !p.endTime)?.id;
@@ -4457,11 +4521,21 @@ function openConsultModal(row) {
     if (!dest) { showBanner({ type: "warn", title: "Pick a destination", autoHideMs: 3000 }); return; }
     try {
       const destination = { [dest.kind]: dest.value };
-      await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, {
+      // speakTo enum is uppercase (DESTINATION | OBJECT | BOTH); the prior
+      // lowercase value worked only because GC fell back to the default.
+      const resp = await apiFetch(`/api/v2/conversations/calls/${convId}/participants/${partId}/consult`, {
         method: "POST",
-        body: { speakTo: "destination", destination }
+        body: { speakTo: "DESTINATION", destination }
       });
+      const destPartId = resp?.destinationParticipantId;
+      if (destPartId) {
+        consultState.set(convId, { destinationPartId: destPartId, mode: "DESTINATION" });
+        dlog.info("consult", "started", { convId, destPartId, kind: dest.kind, value: dest.value });
+      } else {
+        dlog.warn("consult", "POST returned no destinationParticipantId — controls unavailable", { convId, resp });
+      }
       closeModal("consultModal");
+      try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
     } catch (e) { showBanner({ type: "error", title: "Consult failed", message: e.message, autoHideMs: 5000 }); }
   };
 }
@@ -7633,7 +7707,7 @@ function wireSdkEvents() {
         dlog.info("gcSdk", "evicted stale pendingSession on sessionEnded", { cid, sid });
       }
     } catch (e) { dlog.warn("gcSdk", "pendingSession evict failed", { cid, msg: e?.message }); }
-    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); stopSdkRingtone(cid); }
+    if (cid) { gcSdkSessions.delete(cid); sdkAutoAcceptIds.delete(cid); stopSdkRingtone(cid); consultState.delete(cid); }
     renderCallWidgets();
     try { renderInlineCallStrip(); } catch {}
   });
@@ -7707,6 +7781,7 @@ function wireSdkEvents() {
       gcSdkSessions.delete(cid);
       sdkAutoAcceptIds.delete(cid);
       stopSdkRingtone(cid);
+      consultState.delete(cid);
     }
     // Added → genuinely-new conversation showing up on our persistent
     // softphone. LA>1 mux case where no pendingSession event fires.
