@@ -7675,22 +7675,50 @@ function wireSdkEvents() {
     dlog.info("gcSdk-evt", "station", { action: info?.action, id: info?.station?.id, name: info?.station?.name, type: info?.station?.type });
     try { renderMyPresence(); } catch {}
   });
-  // v8 only: conversationUpdate fires when GC multiplexes a new call
-  // onto our persistent softphone session (Line Appearance > 1). With
-  // persistent connection, no new pendingSession event fires for the
-  // additional call — instead we get this event with the conv id, and
-  // we treat the conv as "ours" by setting an SDK-session entry with
-  // hasMedia=true. Lets waitForAccepted return true via sdkSessionLive.
+  // v8+: conversationUpdate fires whenever GC's persistent-connection
+  // bookkeeping changes — new mux'd call (added), session ended (removed),
+  // or just a state-change pass (current). The event shape from v11 is
+  // { added: [...], removed: [...], current: [...], activeConversationId? }
+  // where each item carries its own conversationId/sessionId.
+  //
+  // PRIOR BUG: the old handler ignored added/removed and blindly extracted
+  // a cid from anywhere it could find one, then unconditionally re-added an
+  // entry with hasMedia=true. The SDK emits this event with `removed:[{...}]`
+  // immediately after sessionEnded — which made the handler resurrect the
+  // entry sessionEnded had just deleted, leaving hasMe=true on a call the
+  // agent had already transferred away. UI got stuck "on" the call; hold/
+  // mute/end all failed because the underlying participant was terminated.
+  //
+  // New behavior: walk added/removed explicitly.
   gcSdk.on?.("conversationUpdate", (evt) => {
-    const cid = evt?.conversationId || evt?.activeConversationId || evt?.id;
-    const sessIds = evt?.sessionIds || evt?.activeSessions || [];
-    dlog.info("gcSdk-evt", "conversationUpdate", { cid, sessIds, raw: evt });
-    if (!cid) return;
-    const cur = gcSdkSessions.get(cid) || {};
-    const sid = (Array.isArray(sessIds) && sessIds[0]) || cur.sessionId || `mux-${cid}`;
-    gcSdkSessions.set(cid, { ...cur, sessionId: sid, pending: false, hasMedia: true, multiplex: true });
-    sdkAutoAcceptIds.delete(cid);
-    seedConvWithRetry(cid, 3, 700);
+    const added = Array.isArray(evt?.added) ? evt.added : [];
+    const removed = Array.isArray(evt?.removed) ? evt.removed : [];
+    dlog.info("gcSdk-evt", "conversationUpdate", {
+      addedIds: added.map(a => a?.conversationId).filter(Boolean),
+      removedIds: removed.map(r => r?.conversationId).filter(Boolean),
+      activeConversationId: evt?.activeConversationId || null
+    });
+    // Removed → drop our SDK-session bookkeeping. sessionEnded usually fires
+    // first, but the two events race; doing this here too is defensive and
+    // (critically) prevents this handler from undoing sessionEnded's cleanup.
+    for (const r of removed) {
+      const cid = r?.conversationId;
+      if (!cid) continue;
+      gcSdkSessions.delete(cid);
+      sdkAutoAcceptIds.delete(cid);
+      stopSdkRingtone(cid);
+    }
+    // Added → genuinely-new conversation showing up on our persistent
+    // softphone. LA>1 mux case where no pendingSession event fires.
+    for (const a of added) {
+      const cid = a?.conversationId;
+      if (!cid) continue;
+      const cur = gcSdkSessions.get(cid) || {};
+      const sid = a?.sessionId || cur.sessionId || `mux-${cid}`;
+      gcSdkSessions.set(cid, { ...cur, sessionId: sid, pending: false, hasMedia: true, multiplex: true });
+      sdkAutoAcceptIds.delete(cid);
+      seedConvWithRetry(cid, 3, 700);
+    }
     try { renderInlineCallStrip(); renderCallWidgets(); renderAll(); } catch {}
   });
   gcSdk.on("error", (err) => {
