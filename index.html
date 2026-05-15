@@ -4323,90 +4323,21 @@ function mountSmartDestinationPicker(host) {
   return ctrl;
 }
 
-// Post-transfer SDK reconnect. Live log 15:14-15:26 / 16:09-16:10 proved
-// that after a successful blind transfer (Unattended /replace/queue + agent
-// leg PATCH disconnect), GC's queue routing CAN route the conversation back
-// to the same agent — and we observed the new alerting participant being
-// added (participantCount jumps + v2.users.{id}.conversations.calls notif
-// fires) — but the v6 WebRTC SDK's session manager retains per-conversation
-// state from the original session. The fresh propose for the same conv id
-// is suppressed as a duplicate, so no [gcSdk-evt] pendingSession fires on
-// the dashboard. The SIP BYE that would naturally clear this state takes
-// ~10 minutes. A clean SDK reconnect resets the session manager's per-conv
-// map immediately, allowing fresh pendingSessions to flow.
+// After a transfer completes, drop our local cached session for that
+// conversation so the inline call strip / widgets stop showing it.
 //
-// Confirmed independently: at 15:15:16 the SDK auto-reconnected on its own
-// (we logged "[gcSdk-evt] connected reconnect:false") and the next propose
-// fired cleanly. Forcing the reconnect ourselves does the same thing under
-// our control instead of waiting for the SDK to notice.
-function scheduleSdkReconnectAfterTransfer(convId) {
-  // Drop our local cached session so the inline call strip / widgets
-  // don't show a phantom call during the reconnect window.
+// NOTE (2026-05-14): this used to also schedule an SDK reconnect + a
+// presence-cycle "poke" to force the transferred call back to this
+// agent. That was a v6-era workaround for the second-call propose bug
+// — which the v6->v11 SDK bump fixed. On v11 the poke just boomeranged
+// the call back and made the SDK thrash on the conflicting participant
+// legs (the flickering call). Removed: v11 routes a transferred call
+// to an eligible on-queue agent natively, no poke needed.
+function clearTransferredCallLocally(convId) {
   gcSdkSessions.delete(convId);
   sdkAutoAcceptIds.delete(convId);
   stopSdkRingtone(convId);
   try { renderInlineCallStrip(); renderCallWidgets(); } catch {}
-  if (!gcSdkReady) return;
-  setTimeout(async () => {
-    dlog.info("transfer", "triggering SDK reconnect to clear stale session state", { convId });
-    try {
-      const reconnectFn = typeof gcSdk?.reconnect === "function" ? gcSdk.reconnect.bind(gcSdk) : null;
-      if (reconnectFn) {
-        await Promise.resolve(reconnectFn());
-        dlog.success("transfer", "SDK reconnect ok", { convId });
-      } else {
-        const dc = typeof gcSdk?.disconnect === "function" ? gcSdk.disconnect.bind(gcSdk) : null;
-        const cn = typeof gcSdk?.connect    === "function" ? gcSdk.connect.bind(gcSdk)    : null;
-        if (dc && cn) {
-          await Promise.resolve(dc()).catch(() => {});
-          await cn();
-          dlog.success("transfer", "SDK disconnect+connect cycle ok", { convId });
-        } else {
-          dlog.warn("transfer", "no reconnect API available on SDK", { convId });
-        }
-      }
-    } catch (e) {
-      dlog.warn("transfer", "SDK reconnect failed", { convId, msg: e?.message });
-    }
-    // After reconnect: nudge GC's routing engine to re-evaluate this agent.
-    // Live log proved that without this nudge GC's routing doesn't re-offer
-    // a transferred call to the same agent within the test window — but a
-    // presence cycle (Available → On Queue) at 16:10 caused the routing
-    // engine to add the agent back as an alerting participant within ~3s
-    // (participantCount jumped 8→9 + v2.users.{id}.conversations.calls
-    // notification). We replicate that under our control.
-    try {
-      await pokeRoutingEngineForRerouteAfterTransfer();
-      dlog.success("transfer", "presence cycle complete (routing re-evaluation triggered)", { convId });
-    } catch (e) {
-      dlog.warn("transfer", "presence cycle failed", { convId, msg: e?.message });
-    }
-  }, 1500);
-}
-
-// Cycle the agent's presence (Available → On Queue) to force GC's queue
-// routing engine to re-evaluate availability. Used post-transfer because
-// the routing engine doesn't immediately re-offer a transferred call to
-// the source agent — it waits for a status change to retry. This mimics
-// the manual On Queue toggle the user happens to do today.
-async function pokeRoutingEngineForRerouteAfterTransfer() {
-  if (!currentUser?.id) return;
-  // Resolve the target presence definitions just-in-time so we don't
-  // need to bake them into the boot path. Cached after first call.
-  const defs = await apiFetch(`/api/v2/presencedefinitions?pageSize=100`).then(r => r?.entities || []).catch(() => []);
-  const onQ      = defs.find(d => /^ONQUEUE$/i.test((d.systemPresence || "").replace(/[\s_]/g, "")));
-  const available = defs.find(d => /^AVAILABLE$/i.test((d.systemPresence || "").replace(/[\s_]/g, "")));
-  if (!onQ || !available) {
-    dlog.warn("transfer", "presence cycle skipped — no ONQUEUE / AVAILABLE definitions found", { onQ: !!onQ, available: !!available });
-    return;
-  }
-  await apiFetch(`/api/v2/users/${currentUser.id}/presences/purecloud`, {
-    method: "PATCH", body: { presenceDefinition: { id: available.id } }
-  });
-  await new Promise(r => setTimeout(r, 600));
-  await apiFetch(`/api/v2/users/${currentUser.id}/presences/purecloud`, {
-    method: "PATCH", body: { presenceDefinition: { id: onQ.id } }
-  });
 }
 
 function openTransferModal(row) {
@@ -4462,7 +4393,7 @@ function openTransferModal(row) {
         } catch (e2) {
           dlog.info("transfer", "Unattended: agent leg already ended server-side", { convId, msg: e2?.message });
         }
-        scheduleSdkReconnectAfterTransfer(convId);
+        clearTransferredCallLocally(convId);
       } catch (e1) {
         const msg = e1?.message || "";
         if (/transfer\.acd\.call\.unattended|cannot be transferred unattended/i.test(msg)) {
@@ -4476,7 +4407,7 @@ function openTransferModal(row) {
           } catch (e2) {
             dlog.warn("transfer", "post-Attended leg disconnect failed (likely already ended)", { msg: e2?.message });
           }
-          scheduleSdkReconnectAfterTransfer(convId);
+          clearTransferredCallLocally(convId);
         } else {
           throw e1;
         }
