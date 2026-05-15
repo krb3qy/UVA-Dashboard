@@ -7623,6 +7623,7 @@ async function initWebrtcSdk() {
       }
       dumpSdkState("post-init", { hasAssociatedStation: hasAssoc, micPermState, audioInputCount });
       startSdkHeartbeat();
+      wireDeviceChangeRebind();
     } catch (e) { dlog.warn("gcSdk", "post-init station verify failed", { msg: e.message }); }
   } catch (e) {
     gcSdkError = e?.message || String(e);
@@ -7630,6 +7631,58 @@ async function initWebrtcSdk() {
     dlog.error("gcSdk", "initialize failed", { msg: gcSdkError, stack: e?.stack });
     showSdkUnavailableBanner(gcSdkError);
   }
+}
+
+// Audio-device hot-swap handler. The browser fires `devicechange` when the
+// user plugs in / unplugs a headset, dock, USB audio device, etc. The v11
+// SDK does NOT listen for this on its own — if the in-use mic disappears
+// or the OS reassigns the default device mid-call, the existing WebRTC
+// sender track keeps pointing at the now-stale device and DTLS/audio can
+// die (verified via GC analytics on George Ball's 12:57 + 13:04 calls
+// 2026-05-15: both ended with error.ininedgecontrol.connection.webrtc.
+// endpoint.disconnect.dtlsPeerDisconnect after a headset was plugged in
+// post-login). updateDefaultDevices({audioDeviceId:null, ..., updateActive
+// Sessions:true}) re-binds active sessions to the new OS default.
+let _deviceChangeWired = false;
+function wireDeviceChangeRebind() {
+  if (_deviceChangeWired) return;
+  if (!navigator.mediaDevices?.addEventListener) return;
+  let inFlight = false;
+  navigator.mediaDevices.addEventListener("devicechange", async () => {
+    // Coalesce — the browser commonly fires a burst of devicechange events
+    // when a USB device enumerates.
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      let inCount = 0, outCount = 0;
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        inCount = devs.filter(d => d.kind === "audioinput").length;
+        outCount = devs.filter(d => d.kind === "audiooutput").length;
+      } catch {}
+      dlog.info("media", "devicechange", { audioIn: inCount, audioOut: outCount, activeSessions: gcSdkSessions.size });
+      if (!gcSdkReady || !gcSdk) return;
+      if (typeof gcSdk.updateDefaultDevices !== "function") {
+        dlog.warn("media", "updateDefaultDevices not available on SDK — cannot rebind");
+        return;
+      }
+      // null = system default. updateActiveSessions:true rebinds any live
+      // call's outgoing audio + output to the new defaults.
+      await gcSdk.updateDefaultDevices({
+        audioDeviceId: null,
+        outputDeviceId: null,
+        updateActiveSessions: true
+      });
+      dlog.info("media", "rebound default devices on active sessions");
+    } catch (e) {
+      dlog.error("media", "devicechange rebind failed", { msg: e?.message || String(e) });
+    } finally {
+      // Small debounce so a burst of events collapses to one rebind.
+      setTimeout(() => { inFlight = false; }, 300);
+    }
+  });
+  _deviceChangeWired = true;
+  dlog.info("media", "devicechange handler wired");
 }
 
 function wireSdkEvents() {
