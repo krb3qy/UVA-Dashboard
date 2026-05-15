@@ -577,15 +577,12 @@
 
       <!-- Queue Panel with tabs -->
       <div class="panel queue-panel" id="queuePanel">
-        <div class="queue-action-bar" id="queueActionBar" style="display:none;padding:6px 8px;background:var(--win-soft,#f3f3f3);border-bottom:1px solid var(--win-border,#ddd);align-items:center;gap:8px">
-          <span id="queueActionBarLabel" style="flex:1;font-size:12px;color:var(--win-muted)"></span>
-          <button class="btn btn-sm" id="queueActionBarClear">Clear</button>
-        </div>
         <div class="queue-panes" id="queuePanes" data-split="single">
           <div class="queue-pane" data-pane="a">
             <div class="tab-bar" id="tabBar">
               <button class="add-tab" id="addTabBtn">+ Queue</button>
               <span class="sp" style="flex:1"></span>
+              <button class="btn btn-sm" id="queueClearSelectionBtn" style="display:none;margin-right:6px" title="Clear queue selection (Esc)">Clear</button>
               <div class="split-toggle" id="splitToggle" title="Split queue panel">
                 <button class="split-btn" data-split-mode="single" title="Single view">▭</button>
                 <button class="split-btn" data-split-mode="v" title="Side-by-side split">◫</button>
@@ -1590,6 +1587,13 @@ function wireDevPanel() {
       e.preventDefault();
       if (!DEV_USER_IDS.has((typeof currentUser !== "undefined" && currentUser?.id) || "")) return;
       devPanelOpen ? closeDevPanel() : openDevPanel();
+    } else if (e.key === "Escape" && typeof queueViewSelectedIds !== "undefined" && queueViewSelectedIds.size > 0) {
+      // Esc clears queue multi-selection. Skip if a modal is open so the
+      // modal's Esc behavior wins (no current modal Esc handler, but
+      // defensive — sets precedent in the right direction).
+      if (document.querySelector(".modal-backdrop.active")) return;
+      queueViewSelectedIds.clear();
+      try { renderAll(); } catch {}
     }
   });
 }
@@ -3617,20 +3621,27 @@ function renderInlineCallStrip() {
   if (!host) return;
   // Show calls where the conversations Map says we're active, OR where
   // we have an SDK session AND we know the conversation. Orphaned SDK
-  // sessions (no conv in our map) are pruned — that's a stale entry,
-  // not a real call to render.
+  // sessions (no conv in our map for a while) are pruned — but freshly-
+  // set entries get a grace window: the pendingSession event arrives a
+  // few hundred ms BEFORE the WS conversations.calls notif that ingests
+  // the conv, and the pendingSession handler triggers THIS render
+  // synchronously after gcSdkSessions.set. Without the grace, the entry
+  // it just set is reaped on the spot — call rings audibly but the UI
+  // shows nothing (verified in Alex's 11:46:22 log).
   const liveIds = new Set();
   for (const r of conversations.values()) {
     if (r.hasMe && !r.disconnected) liveIds.add(r.id);
   }
-  for (const cid of gcSdkSessions.keys()) {
-    if (conversations.has(cid)) liveIds.add(cid);
-    else {
-      // Stale SDK session for a conv we no longer track — drop it.
-      gcSdkSessions.delete(cid);
-      sdkAutoAcceptIds.delete(cid);
-      stopSdkRingtone(cid);
-    }
+  const NOW = Date.now();
+  const PRUNE_GRACE_MS = 8000;
+  for (const [cid, s] of gcSdkSessions.entries()) {
+    if (conversations.has(cid)) { liveIds.add(cid); continue; }
+    if (!s.firstSeenAt) { s.firstSeenAt = NOW; continue; }
+    if (NOW - s.firstSeenAt < PRUNE_GRACE_MS) continue;
+    // Truly orphaned — drop it.
+    gcSdkSessions.delete(cid);
+    sdkAutoAcceptIds.delete(cid);
+    stopSdkRingtone(cid);
   }
   if (liveIds.size === 0) {
     host.classList.remove("active");
@@ -3680,18 +3691,25 @@ function renderInlineCallStrip() {
 }
 
 function renderQueueActionBar() {
-  const bar = el("queueActionBar");
-  if (!bar) return;
   // Drop disconnected/missing ids from the selection so the count stays honest.
   for (const id of [...queueViewSelectedIds]) {
     const r = conversations.get(id);
     if (!r || r.disconnected) queueViewSelectedIds.delete(id);
   }
   const n = queueViewSelectedIds.size;
-  if (n < 2) { bar.style.display = "none"; return; }
-  bar.style.display = "flex";
-  el("queueActionBarLabel").textContent = `${n} interactions selected — use the Merge toolbar button to conference`;
-  el("queueActionBarClear").onclick = () => { queueViewSelectedIds.clear(); renderAll(); };
+  // Selection is communicated by row highlighting + the Merge toolbar button
+  // un-greying. We surface a "Clear (n)" button in the tab bar (next to the
+  // split-view toggles) only when 2+ rows are selected — no instructional
+  // banner. Esc also clears the selection.
+  const btn = el("queueClearSelectionBtn");
+  if (!btn) return;
+  if (n >= 2) {
+    btn.style.display = "";
+    btn.textContent = `Clear (${n})`;
+    btn.onclick = () => { queueViewSelectedIds.clear(); renderAll(); };
+  } else {
+    btn.style.display = "none";
+  }
 }
 
 // Pull every selected queue interaction onto the current user, then
@@ -5735,13 +5753,18 @@ function wireDragDrop() {
     // continued server-side. mergeQueueCallsViaSdk does the stale-state
     // cleanup + Phase 0 fast-path detection (already-on-this-call → simple
     // PATCH onto it) that the button path has been getting right.
+    const src = conversations.get(srcId);
+    const dest = conversations.get(destId);
+    const label = `${dest?.name || destId.slice(0, 8)} + ${src?.name || srcId.slice(0, 8)}`;
+    // Immediate visual feedback — merge can take a few seconds (API-driven,
+    // Phase A/B can /assign first). Without this users assume nothing
+    // happened and re-drag, double-triggering.
+    showBanner({ type: "info", title: "Merging…",
+      message: `Conferencing ${label}…`, autoHideMs: 10000 });
     try {
-      const src = conversations.get(srcId);
-      const dest = conversations.get(destId);
       await mergeQueueCallsViaSdk([destId, srcId]);
-      showBanner({ type: "info", title: "Merged",
-        message: `Conferenced ${dest?.name || destId.slice(0, 8)} + ${src?.name || srcId.slice(0, 8)}`,
-        autoHideMs: 3000 });
+      showBanner({ type: "success", title: "Merged",
+        message: `Conferenced ${label}`, autoHideMs: 3000 });
     } catch (e2) {
       showBanner({ type: "error", title: "Merge failed", message: e2.message, autoHideMs: 5000 });
     }
