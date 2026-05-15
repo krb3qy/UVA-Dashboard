@@ -5726,27 +5726,26 @@ function wireDragDrop() {
     const srcId = dragSrc; dragSrc = null;
     document.querySelectorAll("tr.row.drop-target").forEach(x => x.classList.remove("drop-target"));
     if (!srcId || !destId || srcId === destId) return;
-    try { await mergeCalls(srcId, destId); }
-    catch (e2) { showBanner({ type: "error", title: "Merge failed", message: e2.message, autoHideMs: 5000 }); }
+    // Route through the SAME defensive merge path the Conference button uses
+    // (mergeQueueCallsViaSdk) instead of a bare PATCH. The bare-PATCH path
+    // (the old mergeCalls) confused v11's SDK when the user was on both
+    // calls already: post-merge the SDK had two sessions tracking conv ids
+    // it could no longer reconcile, and ~38s later ended the surviving
+    // session "successfully" — agent lost WebRTC audio while the conference
+    // continued server-side. mergeQueueCallsViaSdk does the stale-state
+    // cleanup + Phase 0 fast-path detection (already-on-this-call → simple
+    // PATCH onto it) that the button path has been getting right.
+    try {
+      const src = conversations.get(srcId);
+      const dest = conversations.get(destId);
+      await mergeQueueCallsViaSdk([destId, srcId]);
+      showBanner({ type: "info", title: "Merged",
+        message: `Conferenced ${dest?.name || destId.slice(0, 8)} + ${src?.name || srcId.slice(0, 8)}`,
+        autoHideMs: 3000 });
+    } catch (e2) {
+      showBanner({ type: "error", title: "Merge failed", message: e2.message, autoHideMs: 5000 });
+    }
   });
-}
-
-// Correct merge: PATCH /conversations/calls/{target}/conference with {conversationIds: [others]}
-// Verified from SDK endpoint inventory + IW-Merge working implementation.
-async function mergeCalls(srcId, destId) {
-  await ensureMaxConf();
-  const src = conversations.get(srcId); const dest = conversations.get(destId);
-  if (!src || !dest) throw new Error("Missing conversation");
-  // Target is the destination row (where it was dropped); source gets merged in.
-  const target = destId;
-  const others = [srcId];
-  try {
-    await apiFetch(`/api/v2/conversations/calls/${target}/conference`, { method: "PATCH", body: { conversationIds: others } });
-  } catch (e1) {
-    // Fallback pattern used by IW-Merge when /conference sub-path 404s
-    await apiFetch(`/api/v2/conversations/calls/${target}`, { method: "PATCH", body: { conversationIds: others } });
-  }
-  showBanner({ type: "info", title: "Merged", message: `Conferenced ${src.name || srcId} + ${dest.name || destId}`, autoHideMs: 3000 });
 }
 
 // Merge N calls into a conference. Target = first id, others merged in.
