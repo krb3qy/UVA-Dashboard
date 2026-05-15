@@ -6133,10 +6133,19 @@ async function mergeQueueCallsViaSdk(ids) {
   // dance and directly PATCH /conference with the queue call as
   // `conversationIds`. GC's edge consolidates server-side via re-INVITE
   // on the existing session.
-  const existingMine = [...conversations.values()].find(r =>
-    r.hasMe && !r.disconnected &&
-    (r.stateKey === "connected" || r.stateKey === "held")
-  );
+  // PATCH /conference drops the agent leg on every conv in conversationIds[]
+  // and keeps the agent leg on the URL conv. The URL conv is therefore the
+  // SURVIVOR — its WebRTC session must be the one carrying live media, or
+  // audio dies. With LA>1, the held sessions have their media suspended
+  // (SDK v8.1.3 "hold other active sessions if LA>1"), so picking a held
+  // conv as the target promotes a session with no media path and drops the
+  // session that actually had it. Verified on Jodie's 2026-05-15 merge of
+  // 59747a39 (held) + f5fde8a0 (connected): code picked the held one as
+  // target, GC disconnected f5fde8a0's agent leg, audio died instantly.
+  // Always prefer the connected call over the held one.
+  const myCalls = [...conversations.values()].filter(r => r.hasMe && !r.disconnected);
+  const existingMine = myCalls.find(r => r.stateKey === "connected")
+                    || myCalls.find(r => r.stateKey === "held");
   if (existingMine) {
     const newCallIds = ids.filter(id => id !== existingMine.id);
     const stillThere = [];
