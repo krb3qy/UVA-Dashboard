@@ -2241,7 +2241,16 @@ function ingestConversation(c, hintQueueId) {
              || [...parts].reverse().find(p => p.purpose === "user" && p.userId)
              || null;
   const isAcd = !!parts.find(p => p.purpose === "agent");
-  const acd = parts.find(p => p.purpose === "acd") || null;
+  // Prefer the LIVE acd leg over an ended one — after a transfer, the
+  // conversation has BOTH the old (source-queue, ended) and the new
+  // (destination-queue, live) acd participants. Picking the first acd
+  // unconditionally would resolve queueId to the source queue, so the
+  // transferred call would appear in the source-queue panel (or nowhere
+  // if the user only monitors the destination) instead of the
+  // destination-queue panel where they expect to see it for pickup.
+  const acd = parts.find(p => p.purpose === "acd" && !p.endTime && (p.state || "").toLowerCase() !== "disconnected")
+           || parts.find(p => p.purpose === "acd")
+           || null;
   const monitor = parts.find(p => p.purpose === "monitor");
   const calls = (agent?.calls || customer?.calls || parts.flatMap(p => p.calls || []));
   // SDK call-state enum:
